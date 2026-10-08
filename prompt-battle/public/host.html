@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Prompt Battle: Moderation</title>
+<link rel="icon" href="/img/promptling.svg">
+<link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+<div class="page" id="app"></div>
+<script src="/js/common.js"></script>
+<script>
+'use strict';
+(async function () {
+  const app = document.getElementById('app');
+  const rooms = store.get('pb-host') || {};   // { CODE: token }
+  const alive = [];
+  for (const [room, token] of Object.entries(rooms)) {
+    try { await api('/api/host/check', { room, token }); alive.push(room); } catch (_) { delete rooms[room]; }
+  }
+  store.set('pb-host', rooms);
+  const err = h('div', { class: 'error' });
+  const pw = h('input', { type: 'password', autocomplete: 'current-password', placeholder: 'Moderator-Passwort' });
+  const go = h('button', { class: 'primary', type: 'submit', text: 'Neuen Raum eröffnen' });
+  const code = h('input', { type: 'text', maxlength: 4, placeholder: 'Raumcode', style: 'text-transform:uppercase;max-width:9em' });
+  const claim = h('button', { type: 'button', text: 'Raum übernehmen', onclick: async () => {
+    err.textContent = '';
+    try {
+      const r = await api('/api/host/claim', { password: pw.value, room: code.value.trim().toUpperCase() });
+      rooms[r.room] = r.token; store.set('pb-host', rooms);
+      location.href = '/screen?room=' + r.room;
+    } catch (e) { err.textContent = e.message; }
+  } });
+  app.replaceChildren(h('div', { class: 'stack' },
+    h('form', { class: 'card stack', onsubmit: async (ev) => {
+      ev.preventDefault(); err.textContent = ''; go.disabled = true;
+      try {
+        const r = await api('/api/host/create', { password: pw.value });
+        rooms[r.room] = r.token; store.set('pb-host', rooms);
+        location.href = '/screen?room=' + r.room;
+      } catch (e) { err.textContent = e.message; go.disabled = false; }
+    } },
+      h('h1', {}, h('span', { class: 'orange', text: '>_ ' }), 'Prompt Battle: Moderation'),
+      h('p', { class: 'muted', text: 'Eröffne einen Raum für dein Training. Du bekommst einen Raumcode, mit dem die Teilnehmer beitreten.' }),
+      h('div', {}, h('label', { text: 'Passwort' }), pw),
+      err,
+      h('div', { class: 'row' }, go),
+      h('details', {}, h('summary', { text: 'Einen laufenden Raum auf diesem Gerät übernehmen' }),
+        h('p', { class: 'small muted', text: 'Falls du das Gerät wechselst: Passwort oben eingeben, Raumcode hier eintragen.' }),
+        h('div', { class: 'row' }, code, claim))),
+    alive.length ? h('div', { class: 'card alt stack' },
+      h('h3', { text: 'Deine laufenden Räume' }),
+      alive.map((room) => h('div', { class: 'row' }, h('span', { class: 'badge', text: room }), h('a', { class: 'btn', href: '/screen?room=' + room, text: 'Weiter moderieren' })))) : null,
+    h('p', { class: 'small muted center' }, 'Teilnehmer gehen auf ', h('a', { href: '/', text: location.host }), ' und geben den Raumcode ein.')));
+  pw.focus();
+})();
+</script>
+</body>
+</html>

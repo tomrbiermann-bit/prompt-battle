@@ -1,0 +1,16 @@
+# Render-Blueprint: in Render "New > Blueprint" wählen und dieses Repository verbinden.
+# Die beiden geheimen Werte fragt Render beim Anlegen ab.
+services:
+  - type: web
+    name: prompt-battle
+    runtime: node
+    region: frankfurt
+    plan: free          # für den Trainingstag besser einen bezahlten Tarif wählen, siehe README
+    buildCommand: npm install
+    startCommand: node server.js
+    healthCheckPath: /api/ping
+    envVars:
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: ADMIN_PASSWORD
+        sync: false
