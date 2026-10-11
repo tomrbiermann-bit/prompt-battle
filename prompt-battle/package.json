@@ -6,7 +6,7 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "test": "node test/simulate.js"
+    "test": "node test/rubrik.js && node test/simulate.js"
   },
   "engines": {
     "node": ">=20"

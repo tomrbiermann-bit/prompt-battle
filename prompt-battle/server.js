@@ -6,6 +6,8 @@ const path = require('path');
 const crypto = require('crypto');
 const game = require('./lib/game');
 const judge = require('./lib/judge');
+const { FIGURES } = require('./lib/figures');
+const { BAUSTEINE } = require('./lib/bausteine');
 
 const PORT = Number(process.env.PORT) || 3000;
 let ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || '';
@@ -86,8 +88,8 @@ async function api(req, res, url) {
   const p = url.pathname;
   if (req.method === 'GET' && p === '/api/events') return events(req, res, url.searchParams);
   if (req.method === 'GET' && p === '/api/ping') return send(res, 200, { ok: true });
-  if (req.method === 'GET' && p === '/api/info') return send(res, 200, { demo: judge.DEMO, figures: game.FIGURES, maxPrompt: game.MAX_PROMPT });
-  if (req.method === 'GET' && p === '/api/room') { const room = game.getRoom(url.searchParams.get('room')); return send(res, 200, { code: room.code, phase: room.phase }); }
+  if (req.method === 'GET' && p === '/api/info') return send(res, 200, { demo: judge.DEMO, figures: FIGURES, maxPrompt: game.MAX_PROMPT });
+  if (req.method === 'GET' && p === '/api/room') { const room = game.getRoom(url.searchParams.get('room')); return send(res, 200, { code: room.code, phase: room.phase, taken: game.taken(room) }); }
   if (req.method === 'GET' && p === '/api/export') {
     const room = hostRoom({ room: url.searchParams.get('room'), token: url.searchParams.get('token') });
     res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'content-disposition': 'attachment; filename="prompt-battle-' + room.code + '.json"' });
@@ -128,7 +130,14 @@ async function api(req, res, url) {
 }
 
 // ---------------------------------------------------------------- Dateien
+// Die Kreaturenliste kommt aus lib/figures.js und wird den Seiten als kleines Skript mitgegeben.
+const FIGURES_JS = 'const FIGURES = ' + JSON.stringify(FIGURES) + ';\nconst BAUSTEINE = ' + JSON.stringify(BAUSTEINE.map((b) => ({ key: b.key, nr: b.nr, name: b.name, kurz: b.kurz, figur: b.figur }))) + ';\n';
+
 function serveStatic(req, res, url) {
+  if (url.pathname === '/js/figures.js') {
+    res.writeHead(200, { 'content-type': MIME['.js'], 'cache-control': 'no-cache', 'x-content-type-options': 'nosniff' });
+    return res.end(FIGURES_JS);
+  }
   let rel = PAGES[url.pathname] || decodeURIComponent(url.pathname).replace(/^\/+/, '');
   const file = path.normalize(path.join(PUBLIC, rel));
   if (!file.startsWith(PUBLIC + path.sep)) { res.writeHead(403); return res.end(); }
@@ -159,5 +168,5 @@ const server = http.createServer((req, res) => {
 game.load();
 server.listen(PORT, () => {
   console.log('Prompt Battle läuft auf Port ' + PORT);
-  console.log(judge.DEMO ? 'DEMO-MODUS: Kein ANTHROPIC_API_KEY gesetzt, es wird ohne KI bewertet.' : 'Schiedsrichter: ' + judge.MODEL_JUDGE + ', Ausführung: ' + judge.MODEL_RUN);
+  console.log(judge.DEMO ? 'Standardbewertung: Kein ANTHROPIC_API_KEY gesetzt, bewertet wird regelbasiert mit dem Baustein-Check (ohne KI).' : 'Schiedsrichter: ' + judge.MODEL_JUDGE + ', Ausführung: ' + judge.MODEL_RUN);
 });

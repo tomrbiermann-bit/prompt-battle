@@ -4,10 +4,14 @@ const fs = require('fs');
 const path = require('path');
 const { DEFAULT_CASES } = require('./cases');
 const judge = require('./judge');
+const rubrik = require('./rubrik');
+const { FIGURE_IDS, labelOf, displayName } = require('./figures');
+const { BAUSTEINE, QUALITAETSCHECK, KEYS, byKey, ALLE } = require('./bausteine');
 
-const FIGURES = ['promptling', 'kontextor', 'halluzino', 'rollux'];
+const FIGURES = FIGURE_IDS;
 const BOT = 'bot';
-const BOT_NAME = 'Halluzino (Hausgegner)';
+const BOT_NAME = 'Hausgegner';
+const BOT_FIGURE = 'halluzino';
 const MAX_PROMPT = 2000;
 const MAX_PLAYERS = 40;
 const MAX_ROOMS = 30;
@@ -40,7 +44,7 @@ function createRoom() {
   const room = {
     code: newCode(), hostToken: rid(16), createdAt: Date.now(),
     phase: 'lobby', roundIndex: -1,
-    settings: { rounds: 6, seconds: 240 },
+    settings: { rounds: Math.min(12, DEFAULT_CASES.length), seconds: 240 },
     cases: clone(DEFAULT_CASES),
     players: {}, rounds: [], met: {}, botGames: {}, adjust: {},
     deadline: null, reveal: 0, progress: null
@@ -112,9 +116,11 @@ function changed(room) { recompute(room); save(); onChange(room); }
 // ---------------------------------------------------------------- Spieler
 function join(room, { name, figure, pid, key }) {
   name = String(name || '').replace(/\s+/g, ' ').trim().slice(0, 20);
-  if (!name) fail('Bitte gib deiner Figur einen Namen.');
-  if (!FIGURES.includes(figure)) fail('Bitte wähle eine Figur.');
+  if (!name) fail('Bitte gib deinen Namen ein.');
+  if (!FIGURES.includes(figure)) fail('Bitte wähle eine Kreatur.');
   let p = pid && room.players[pid];
+  const doppelt = Object.values(room.players).some((x) => x !== p && x.figure === figure && x.name.toLowerCase() === name.toLowerCase());
+  if (doppelt) fail('"' + displayName(name, figure) + '" gibt es in diesem Raum schon. Wähle eine andere Kreatur oder ergänze deinen Namen.');
   if (p && p.key === key) { p.name = name; p.figure = figure; changed(room); return p; }
   if (room.phase === 'final') fail('Dieses Spiel ist schon beendet.');
   if (Object.keys(room.players).length >= MAX_PLAYERS) fail('Der Raum ist voll.');
@@ -145,7 +151,7 @@ function recompute(room) {
   for (const p of Object.values(P)) { p.score = 0; p.wins = 0; p.bonus = 0; p.quality = 0; }
   room.rounds.forEach((r, i) => {
     const current = i === room.roundIndex;
-    const allOpen = !current || ['best', 'board', 'final'].includes(room.phase);
+    const allOpen = !current || ['best', 'lesson', 'board', 'final'].includes(room.phase);
     r.matches.forEach((m, j) => {
       const open = allOpen || (room.phase === 'reveal' && j < room.reveal);
       if (!open || !m.verdict) return;
@@ -196,16 +202,20 @@ function armTimer(room) {
   }
 }
 
+const caseSeconds = (room, c) => (c && c.minuten >= 0.5 && c.minuten <= 30 ? Math.round(c.minuten * 60) : room.settings.seconds);
+
 function startRound(room) {
   if (!['lobby', 'board'].includes(room.phase)) fail('Jetzt kann keine Runde gestartet werden.');
   if (Object.keys(room.players).length < 1) fail('Es ist noch niemand im Raum.');
   if (room.roundIndex + 1 >= room.settings.rounds) { room.phase = 'final'; changed(room); return; }
   room.roundIndex++;
   const c = clone(room.cases[room.roundIndex % room.cases.length]);
+  // Der Baukasten wächst mit: bekannt sind die Bausteine aller bisherigen Runden und der dieser Runde
+  c.bekannt = rubrik.bekanntBis(room.rounds.slice(0, room.roundIndex).map((x) => x.case).concat([c]));
   room.rounds[room.roundIndex] = { index: room.roundIndex, case: c, submissions: {}, matches: [], best: null };
   room.phase = 'writing';
   room.reveal = 0;
-  room.deadline = Date.now() + room.settings.seconds * 1000;
+  room.deadline = Date.now() + caseSeconds(room, c) * 1000;
   armTimer(room);
   changed(room);
 }
@@ -217,15 +227,24 @@ async function pool(tasks, limit) {
 }
 
 const botPrompt = (c) => 'Schreib mal was zu: ' + c.titel;
-const snap = (room, pid) => (pid === BOT ? { name: BOT_NAME, figure: 'halluzino' } : { name: room.players[pid].name, figure: room.players[pid].figure });
+const snap = (room, pid) => (pid === BOT ? { name: BOT_NAME, figure: BOT_FIGURE } : { name: room.players[pid].name, figure: room.players[pid].figure });
 
 async function evaluate(room, r, m) {
   // 1. beide Prompts ausführen  2. Schiedsrichter fragen (Reihenfolge A/B zufällig, gegen Positionsvorteile)
-  m.error = null;
-  const [oa, ob] = await Promise.all([judge.runPrompt(r.case, m.promptA), judge.runPrompt(r.case, m.promptB)]);
-  m.outA = oa; m.outB = ob;
-  const swap = crypto.randomInt(2) === 1;
-  const v = swap ? await judge.judgeMatch(r.case, m.promptB, ob, m.promptA, oa) : await judge.judgeMatch(r.case, m.promptA, oa, m.promptB, ob);
+  m.error = null; m.fallback = false;
+  const swap = !judge.DEMO && crypto.randomInt(2) === 1; // nur die KI braucht den Schutz gegen Positionsvorteile
+  let v;
+  try {
+    const [oa, ob] = await Promise.all([judge.runPrompt(r.case, m.promptA), judge.runPrompt(r.case, m.promptB)]);
+    m.outA = oa; m.outB = ob;
+    v = swap ? await judge.judgeMatch(r.case, m.promptB, ob, m.promptA, oa) : await judge.judgeMatch(r.case, m.promptA, oa, m.promptB, ob);
+  } catch (e) {
+    // KI nicht erreichbar: Das Spiel läuft mit der Standardbewertung weiter.
+    console.error('KI-Bewertung fehlgeschlagen, Standardbewertung springt ein:', e.message || e);
+    m.fallback = true;
+    v = swap ? judge.standardJudge(r.case, m.promptB, m.promptA) : judge.standardJudge(r.case, m.promptA, m.promptB);
+    v.reason = 'Die KI war gerade nicht erreichbar, deshalb hat der Baustein-Check entschieden. ' + v.reason;
+  }
   const sw = (t) => String(t || '').replace(/\b(Prompt|Antwort) A\b/g, '$1 §').replace(/\b(Prompt|Antwort) B\b/g, '$1 A').replace(/\b(Prompt|Antwort) §/g, '$1 B');
   m.verdict = swap
     ? { winner: v.winner === 'A' ? 'b' : 'a', scoreA: v.scoreB, scoreB: v.scoreA, reason: sw(v.reason), strengthA: sw(v.strengthB), strengthB: sw(v.strengthA), tipA: sw(v.tipB), tipB: sw(v.tipA), cheatA: v.cheatB, cheatB: v.cheatA }
@@ -254,16 +273,42 @@ async function chooseBest(room, r) {
       const prompt = side === 'a' ? m.promptA : m.promptB;
       if (pid === BOT || !prompt || !room.players[pid]) continue;
       if (side === 'a' ? m.verdict.cheatA : m.verdict.cheatB) continue;
-      cands.push({ pid, prompt, output: (side === 'a' ? m.outA : m.outB) || '', score: (side === 'a' ? m.verdict.scoreA : m.verdict.scoreB) + (m.verdict.winner === side ? 5 : 0) });
+      cands.push({ pid, prompt, check: side === 'a' ? m.checkA : m.checkB, output: (side === 'a' ? m.outA : m.outB) || '', score: (side === 'a' ? m.verdict.scoreA : m.verdict.scoreB) + (m.verdict.winner === side ? 5 : 0) });
     }
   }
   if (!cands.length) { r.best = null; return; }
   cands.sort((x, y) => y.score - x.score);
   const top = cands.slice(0, 4);
   let pick;
-  try { pick = await judge.pickBest(r.case, top); } catch (e) { pick = { index: 0, reason: 'Höchste Punktzahl der Runde.', learn: '' }; r.bestError = e.message; }
+  try { pick = await judge.pickBest(r.case, top); } catch (e) { pick = judge.standardBest(r.case, top); r.bestError = e.message; }
   const w = top[pick.index];
-  r.best = { pid: w.pid, name: room.players[w.pid].name, figure: room.players[w.pid].figure, prompt: w.prompt, output: w.output, reason: pick.reason, learn: pick.learn };
+  r.best = { pid: w.pid, name: room.players[w.pid].name, figure: room.players[w.pid].figure, prompt: w.prompt, output: w.output, reason: pick.reason, learn: pick.learn,
+    check: rubrik.sicht(w.check, false) };
+}
+
+// Erklärung nach der Runde: der Baustein, um den es im Case ging, mit Zahlen aus den Prompts der Teilnehmer
+function buildLesson(room, r) {
+  const f = r.case.fokus;
+  if (!f || (f !== ALLE && !byKey[f])) return null;
+  const sides = [];
+  for (const m of r.matches) {
+    for (const side of ['a', 'b']) {
+      const pid = m[side], check = side === 'a' ? m.checkA : m.checkB;
+      if (pid === BOT || !check) continue;
+      sides.push({ name: side === 'a' ? m.aName : m.bName, figure: side === 'a' ? m.aFigure : m.bFigure, check });
+    }
+  }
+  const stat = (k) => ({
+    key: k, nr: byKey[k].nr, name: byKey[k].name, gesamt: sides.length,
+    mit: sides.filter((s) => s.check.stufen[k] >= 2).length, angedeutet: sides.filter((s) => s.check.stufen[k] === 1).length
+  });
+  const vergleich = r.case.ohne && r.case.mit ? { ohne: r.case.ohne, mit: r.case.mit } : null;
+  if (f === ALLE) {
+    return { final: true, stats: KEYS.map(stat), gesamt: sides.length, komplett: sides.filter((s) => s.check.alle === 6).length, vergleich, debrief: r.case.debrief || '', check: QUALITAETSCHECK };
+  }
+  const top = sides.filter((s) => s.check.stufen[f] >= 2 && s.check.zitate[f])
+    .sort((x, y) => y.check.stufen[f] - x.check.stufen[f] || y.check.punkte - x.check.punkte)[0];
+  return { final: false, baustein: byKey[f], stat: stat(f), vergleich, debrief: r.case.debrief || '', beispiel: top ? { name: top.name, figure: top.figure, zitat: top.check.zitate[f] } : null };
 }
 
 async function closeRound(room) {
@@ -280,8 +325,12 @@ async function closeRound(room) {
       const sa = snap(room, a), sb = snap(room, b);
       return { id: rid(4), a, b, aName: sa.name, aFigure: sa.figure, bName: sb.name, bFigure: sb.figure,
         promptA: r.submissions[a] || '', promptB: b === BOT ? botPrompt(r.case) : r.submissions[b] || '',
-        outA: '', outB: '', verdict: null, error: null, walkover: false, manual: false };
+        outA: '', outB: '', verdict: null, error: null, walkover: false, manual: false, fallback: false };
     });
+    for (const m of r.matches) { // Baustein-Check für jeden abgegebenen Prompt, unabhängig vom Schiedsrichter
+      m.checkA = m.promptA ? rubrik.kurz(rubrik.analyse(m.promptA, r.case)) : null;
+      m.checkB = m.promptB ? rubrik.kurz(rubrik.analyse(m.promptB, r.case)) : null;
+    }
     const todo = r.matches.filter((m) => !walkover(m));
     room.progress = { done: 0, total: todo.length + 1 };
     changed(room);
@@ -290,7 +339,9 @@ async function closeRound(room) {
       room.progress.done++;
       onChange(room);
     }), 5);
+    if (judge.DEMO) await new Promise((res) => setTimeout(res, 1500)); // kurzer Spannungsmoment
     await chooseBest(room, r);
+    r.lesson = buildLesson(room, r);
   } catch (e) {
     console.error('Fehler beim Schließen der Runde:', e);
   } finally {
@@ -315,10 +366,19 @@ async function hostAction(room, action, body) {
     }
     case 'cases': {
       if (!Array.isArray(body.cases) || !body.cases.length) fail('Mindestens ein Case wird gebraucht.');
-      const cs = body.cases.slice(0, 12).map((c) => ({
-        titel: String(c.titel || '').trim().slice(0, 80), aufgabe: String(c.aufgabe || '').trim().slice(0, 1200),
-        material: String(c.material || '').trim().slice(0, 3000), kriterien: String(c.kriterien || '').trim().slice(0, 800)
-      })).filter((c) => c.titel && c.aufgabe);
+      const cs = body.cases.slice(0, 12).map((c) => {
+        const min = Number(c.minuten);
+        const sw = Array.isArray(c.stichworte) ? c.stichworte : String(c.stichworte || '').split(',');
+        return {
+          titel: String(c.titel || '').trim().slice(0, 80), aufgabe: String(c.aufgabe || '').trim().slice(0, 1200),
+          material: String(c.material || '').trim().slice(0, 3000), kriterien: String(c.kriterien || '').trim().slice(0, 800),
+          fokus: c.fokus === ALLE || byKey[c.fokus] ? c.fokus : '',
+          stichworte: sw.map((x) => String(x).trim().slice(0, 120)).filter(Boolean).slice(0, 12),
+          ohne: String(c.ohne || '').trim().slice(0, 1500), mit: String(c.mit || '').trim().slice(0, 1500),
+          debrief: String(c.debrief || '').trim().slice(0, 400),
+          minuten: min >= 0.5 && min <= 30 ? min : null
+        };
+      }).filter((c) => c.titel && c.aufgabe);
       if (!cs.length) fail('Jeder Case braucht einen Titel und eine Aufgabe.');
       room.cases = cs;
       break;
@@ -328,8 +388,9 @@ async function hostAction(room, action, body) {
     case 'close': if (room.phase !== 'writing') fail('Es läuft gerade keine Schreibphase.'); closeRound(room).catch((e) => console.error(e)); return;
     case 'revealNext': if (room.phase === 'reveal') room.reveal = Math.min(r.matches.length, room.reveal + 1); break;
     case 'revealAll': if (room.phase === 'reveal') room.reveal = r.matches.length; break;
-    case 'best': if (room.phase === 'reveal') { room.reveal = r.matches.length; room.phase = r.best ? 'best' : 'board'; } break;
-    case 'board': if (['reveal', 'best'].includes(room.phase)) { room.reveal = r.matches.length; room.phase = 'board'; } break;
+    case 'best': if (room.phase === 'reveal') { room.reveal = r.matches.length; room.phase = r.best ? 'best' : r.lesson ? 'lesson' : 'board'; } break;
+    case 'lesson': if (['reveal', 'best'].includes(room.phase)) { room.reveal = r.matches.length; room.phase = r.lesson ? 'lesson' : 'board'; } break;
+    case 'board': if (['reveal', 'best', 'lesson'].includes(room.phase)) { room.reveal = r.matches.length; room.phase = 'board'; } break;
     case 'final': if (room.phase === 'board') room.phase = 'final'; break;
     case 'override': {
       const m = r && r.matches.find((x) => x.id === body.matchId);
@@ -337,13 +398,14 @@ async function hostAction(room, action, body) {
       m.verdict = m.verdict || { scoreA: 50, scoreB: 50, strengthA: '', strengthB: '', tipA: '', tipB: '', cheatA: false, cheatB: false };
       m.verdict.winner = body.winner;
       m.verdict.reason = 'Entscheidung des Moderators.' + (m.manual || !m.verdict.reason ? '' : ' Ursprüngliche Begründung: ' + m.verdict.reason);
-      m.manual = true; m.error = null;
+      m.manual = true; m.error = null; m.fallback = false;
       break;
     }
     case 'rejudge': {
       const m = r && r.matches.find((x) => x.id === body.matchId);
       if (!m || m.walkover) fail('Dieses Duell kann nicht neu bewertet werden.');
       try { await evaluate(room, r, m); m.manual = false; } catch (e) { m.error = e.message || String(e); }
+      await chooseBest(room, r).catch(() => {});
       break;
     }
     case 'adjust': {
@@ -364,7 +426,7 @@ async function hostAction(room, action, body) {
 }
 
 // ---------------------------------------------------------------- Sichten (wer sieht was)
-const PHASES_OPEN = ['best', 'board', 'final'];
+const PHASES_OPEN = ['best', 'lesson', 'board', 'final'];
 
 function matchView(room, m, j, level) {
   // level: 'public' (Kurzfassung), 'full' (alle Texte)
@@ -378,13 +440,29 @@ function matchView(room, m, j, level) {
   const vd = m.verdict;
   Object.assign(v, {
     winner: vd ? vd.winner : null, reason: vd ? vd.reason : '', scoreA: vd ? vd.scoreA : 0, scoreB: vd ? vd.scoreB : 0,
-    cheatA: !!(vd && vd.cheatA), cheatB: !!(vd && vd.cheatB), walkover: m.walkover, manual: m.manual, error: level === 'host' ? m.error : (m.error ? 'Bewertung fehlgeschlagen' : null)
+    cheatA: !!(vd && vd.cheatA), cheatB: !!(vd && vd.cheatB), walkover: m.walkover, manual: m.manual, fallback: !!m.fallback, error: level === 'host' ? m.error : (m.error ? 'Bewertung fehlgeschlagen' : null),
+    checkA: rubrik.sicht(m.checkA, false), checkB: rubrik.sicht(m.checkB, false)
   });
   if (level === 'full' || level === 'host') {
     Object.assign(v, { promptA: m.promptA, promptB: m.promptB, outA: m.outA, outB: m.outB,
-      strengthA: vd ? vd.strengthA : '', strengthB: vd ? vd.strengthB : '', tipA: vd ? vd.tipA : '', tipB: vd ? vd.tipB : '' });
+      strengthA: vd ? vd.strengthA : '', strengthB: vd ? vd.strengthB : '', tipA: vd ? vd.tipA : '', tipB: vd ? vd.tipB : '',
+      checkA: rubrik.sicht(m.checkA, true), checkB: rubrik.sicht(m.checkB, true) });
   }
   return v;
+}
+
+// Fortschritt im Baukasten: Welche Bausteine wurden schon erklärt?
+function baukasten(room) {
+  const done = new Set();
+  room.rounds.forEach((x, i) => {
+    const offen = i < room.roundIndex || ['lesson', 'board', 'final'].includes(room.phase);
+    if (!offen || !x.lesson) return;
+    if (x.case.fokus === ALLE) KEYS.forEach((k) => done.add(k)); else done.add(x.case.fokus);
+  });
+  const r = room.rounds[room.roundIndex];
+  const jetzt = r && room.phase === 'lesson' ? r.case.fokus : null;
+  // Namen künftiger Bausteine bleiben verdeckt
+  return BAUSTEINE.map((b) => { const aktuell = jetzt === b.key || jetzt === ALLE, gelernt = done.has(b.key); return { key: b.key, nr: b.nr, name: gelernt || aktuell ? b.name : '?', figur: b.figur, gelernt, aktuell }; });
 }
 
 function view(room, client) {
@@ -394,15 +472,18 @@ function view(room, client) {
   const rank = ranking(room);
   const state = {
     code: room.code, phase: room.phase, round: room.roundIndex + 1, rounds: room.settings.rounds, seconds: room.settings.seconds,
+    roundSeconds: r ? caseSeconds(room, r.case) : room.settings.seconds, baukasten: baukasten(room),
     now: Date.now(), deadline: room.deadline, reveal: room.reveal, progress: room.progress, demo: judge.DEMO,
     players: rank.map((p) => ({ id: p.id, name: p.name, figure: p.figure, score: p.score, wins: p.wins, bonus: p.bonus, quality: p.quality,
       submitted: !!(r && room.phase === 'writing' && r.submissions[p.id]), online: [...room.clients].some((c) => c.pid === p.id) })),
     case: r && room.phase !== 'lobby' && room.phase !== 'final' ? { titel: r.case.titel, aufgabe: r.case.aufgabe, material: r.case.material } : null,
     matches: [], best: null, role: client.role
   };
-  if (r && ['reveal', 'best', 'board'].includes(room.phase)) {
+  if (r && ['reveal', 'best', 'lesson', 'board'].includes(room.phase)) {
     state.matches = r.matches.map((m, j) => matchView(room, m, j, isHost ? 'host' : me && (m.a === me.id || m.b === me.id) ? 'full' : 'public'));
     if (PHASES_OPEN.includes(room.phase) && r.best) state.best = r.best;
+    if (['lesson', 'board'].includes(room.phase) && r.lesson) state.lesson = r.lesson;
+    state.hasLesson = !!r.lesson;
   }
   if (me) {
     const same = (x, y) => x.score === y.score && x.bonus === y.bonus && x.quality === y.quality;
@@ -414,7 +495,8 @@ function view(room, client) {
   if (isHost) {
     state.cases = room.cases;
     state.models = { run: judge.MODEL_RUN, judge: judge.MODEL_JUDGE };
-    state.history = room.rounds.map((x) => ({ titel: x.case.titel, best: x.best ? x.best.name : null }));
+    state.history = room.rounds.map((x) => ({ titel: x.case.titel, best: x.best ? displayName(x.best.name, x.best.figure) : null }));
+    state.bausteine = BAUSTEINE.map((b) => ({ key: b.key, nr: b.nr, name: b.name }));
   }
   return state;
 }
@@ -422,14 +504,22 @@ function view(room, client) {
 function exportRoom(room) {
   return {
     code: room.code, erstellt: new Date(room.createdAt).toISOString(),
-    rangliste: ranking(room).map((p, i) => ({ platz: i + 1, name: p.name, figur: p.figure, punkte: p.score, siege: p.wins, bonus: p.bonus, wertung: p.quality })),
+    rangliste: ranking(room).map((p, i) => ({ platz: i + 1, name: p.name, kreatur: labelOf(p.figure), punkte: p.score, siege: p.wins, bonus: p.bonus, wertung: p.quality })),
     runden: room.rounds.map((r) => ({
-      runde: r.index + 1, case: r.case.titel,
-      besterPrompt: r.best ? { name: r.best.name, prompt: r.best.prompt, begruendung: r.best.reason, lernpunkt: r.best.learn } : null,
-      duelle: r.matches.map((m) => ({ a: m.aName, b: m.bName, promptA: m.promptA, promptB: m.promptB, antwortA: m.outA, antwortB: m.outB,
-        sieger: m.verdict && m.verdict.winner ? (m.verdict.winner === 'a' ? m.aName : m.bName) : null, begruendung: m.verdict ? m.verdict.reason : '', fehler: m.error }))
+      runde: r.index + 1, case: r.case.titel, baustein: r.case.fokus === ALLE ? 'alle' : byKey[r.case.fokus] ? byKey[r.case.fokus].name : '',
+      besterPrompt: r.best ? { name: displayName(r.best.name, r.best.figure), prompt: r.best.prompt, begruendung: r.best.reason, lernpunkt: r.best.learn } : null,
+      duelle: r.matches.map((m) => ({ a: displayName(m.aName, m.aFigure), b: displayName(m.bName, m.bFigure), promptA: m.promptA, promptB: m.promptB, antwortA: m.outA, antwortB: m.outB,
+        bausteineA: m.checkA ? m.checkA.stufen : null, bausteineB: m.checkB ? m.checkB.stufen : null,
+        sieger: m.verdict && m.verdict.winner ? (m.verdict.winner === 'a' ? displayName(m.aName, m.aFigure) : displayName(m.bName, m.bFigure)) : null, begruendung: m.verdict ? m.verdict.reason : '', fehler: m.error }))
     }))
   };
 }
 
-module.exports = { rooms, createRoom, getRoom, cleanup, join, auth, submit, hostAction, view, exportRoom, setBroadcaster, load, GameError, FIGURES, MAX_PROMPT };
+// Wie oft ist jede Kreatur im Raum schon vergeben? (für die Auswahl beim Beitreten)
+function taken(room) {
+  const t = {};
+  for (const p of Object.values(room.players)) t[p.figure] = (t[p.figure] || 0) + 1;
+  return t;
+}
+
+module.exports = { taken, rooms, createRoom, getRoom, cleanup, join, auth, submit, hostAction, view, exportRoom, setBroadcaster, load, GameError, FIGURES, MAX_PROMPT };

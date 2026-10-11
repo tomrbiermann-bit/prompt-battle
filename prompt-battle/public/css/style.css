@@ -91,16 +91,21 @@ img.figure.flip { transform: scaleX(-1); }
 .board .pts { font-family: var(--hand); font-size: 1.6rem; color: var(--orange); white-space: nowrap; }
 .board .sub { font-size: .8rem; color: var(--ink-soft); font-family: var(--sans); }
 
+@media (max-width: 700px) { .board .line { grid-template-columns: 1.8em 2.4em 1fr auto; gap: 6px; padding: 4px 10px 4px 6px; } .board .nm { white-space: normal; overflow-wrap: anywhere; font-size: 1.15rem; line-height: 1.1; } .board .pts { font-size: 1.25rem; } .board .rank { font-size: 1.2rem; } .mrow { font-size: .95em; } .mrow .s { white-space: normal; overflow-wrap: anywhere; line-height: 1.1; } }
+
 /* ------------------------------------------------ Teilnehmerseite */
 .page { max-width: 760px; margin: 0 auto; padding: 14px 16px 60px; }
 .me-bar { display: flex; align-items: center; gap: 10px; padding: 6px 0 12px; }
 .me-bar img { width: 54px; }
 .me-bar .nm { font-family: var(--hand); font-size: 1.4rem; line-height: 1; }
 .figgrid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
-@media (max-width: 520px) { .figgrid { grid-template-columns: repeat(2, 1fr); } }
 .figpick { border: 3px solid var(--line); border-radius: var(--sketch); background: #fff; padding: 6px 6px 8px; cursor: pointer; text-align: center; font-family: var(--hand); font-size: 1.15rem; box-shadow: none; color: var(--ink); }
 .figpick.sel { border-color: var(--orange); background: var(--orange-soft); box-shadow: 3px 4px 0 rgba(243, 111, 47, .3); }
 .figpick small { display: block; font-family: var(--sans); font-size: .72rem; color: var(--ink-soft); line-height: 1.2; }
+.figpick { position: relative; }
+.takenmark { position: absolute; right: 4px; top: 4px; font-family: var(--sans); font-size: .62rem; line-height: 1; background: #fff; border: 1px solid var(--line); border-radius: 999px; padding: 2px 6px; color: var(--ink-soft); z-index: 1; }
+.namepreview { font-size: 1.35rem; text-align: center; min-height: 1.6em; }
+@media (max-width: 520px) { .figgrid { grid-template-columns: repeat(3, 1fr); gap: 6px; } .figpick { padding: 4px 2px 6px; font-size: 1rem; } .figpick small { display: none; } }
 .timer { font-family: var(--hand); font-size: 2rem; line-height: 1; }
 .timer.low { color: var(--orange); animation: pulse .8s ease-in-out infinite; }
 .stack > * + * { margin-top: 16px; }
@@ -108,6 +113,52 @@ details { border: 2px solid var(--line); border-radius: 12px; padding: 8px 14px;
 details summary { cursor: pointer; font-family: var(--hand); font-size: 1.2rem; }
 .result-banner { font-family: var(--hand); font-size: 2.2rem; text-align: center; line-height: 1.1; }
 .waitfig { width: 150px; margin: 10px auto; animation: bob 1.4s ease-in-out infinite; }
+
+/* ------------------------------------------------ Baustein-Check und Erklärung */
+.chips { display: flex; flex-wrap: wrap; gap: 4px; justify-content: center; margin: 4px 0; }
+.chip { display: inline-flex; align-items: center; font-family: var(--hand); font-size: .92em; line-height: 1; padding: 3px 9px 4px; border-radius: 999px; border: 2px solid var(--ink); background: #fff; white-space: nowrap; }
+.chip b { font-weight: 400; }
+.chip b + span { margin-left: .35em; }
+.chipduel { display: grid; gap: 4px; margin: 6px 0 2px; }
+.chipduel .chips { justify-content: flex-start; margin: 0; font-size: .82em; }
+.chips.legend { font-size: .8em; justify-content: flex-start; }
+/* je mehr Orange, desto besser umgesetzt: fehlt, angedeutet, vorhanden, stark */
+.chip.l0 { border-style: dashed; border-color: #c3c7c9; color: #a3a9ac; background: transparent; }
+.chip.l1 { border-style: dashed; border-color: var(--orange); background: #fff; }
+.chip.l2 { border-color: var(--orange); background: var(--orange-soft); }
+.chip.l3 { border-color: var(--orange); background: var(--orange); color: #fff; }
+summary .chips { display: inline-flex; vertical-align: middle; margin: 0 0 0 6px; }
+.checklist { display: grid; gap: 8px; margin-top: 8px; }
+.checkrow { display: flex; gap: 10px; align-items: center; }
+.checkrow .chip { flex: none; min-width: 8.6em; justify-content: flex-start; }
+.checklist.big .checkrow .chip { min-width: 11em; font-size: 1.05em; }
+.statbar { display: flex; height: 16px; border: 2px solid var(--ink); border-radius: 999px; overflow: hidden; background: #fff; margin: 4px 0; }
+.statbar .full { background: var(--orange); }
+.statbar .half { background: repeating-linear-gradient(-45deg, var(--orange-soft), var(--orange-soft) 5px, #fff 5px, #fff 10px); }
+.bfig { width: clamp(76px, 7vw, 140px); flex: none; }
+.lessoncard .stack > * + * { margin-top: 10px; }
+details.material { border: 0; padding: 0; background: transparent; }
+details.material summary { font-size: 1.05rem; margin-bottom: 4px; }
+.bfrage { font-size: 1.35rem; color: var(--ink-soft); }
+.bkern { font-weight: 600; }
+.box.so { border-color: var(--orange); border-style: solid; background: var(--orange-soft); }
+.box.so .hand, .lessoncard .hand { font-size: 1.2em; }
+.bkstrip { display: grid; grid-template-columns: repeat(6, 1fr); gap: .8vw; }
+.bk { font-family: var(--hand); font-size: 1.1em; line-height: 1.1; text-align: center; border: 2px dashed #c3c7c9; color: #a3a9ac; border-radius: var(--sketch2); padding: 5px 6px 7px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.bk.done { border: 2px solid var(--ink); color: var(--ink); background: #fff; }
+.bk.now { border: 3px solid var(--orange); background: var(--orange); color: #fff; }
+.vergleich .gleich { color: var(--ink-soft); }
+.vergleich .neu { background: var(--orange-soft); box-shadow: 0 2px 0 var(--orange); font-weight: 600; }
+.vergleich .alt { text-decoration: line-through; color: var(--ink-soft); }
+.vergleich .legende { display: flex; gap: 16px; flex-wrap: wrap; font-size: .8em; margin-bottom: 6px; color: var(--ink-soft); }
+.lessoncard { font-size: .9em; }
+.debrief { border: 3px solid var(--orange); border-radius: var(--sketch2); background: #fff; padding: 10px 18px 12px; }
+.debrief .hand { font-size: 1.2em; }
+.qc { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
+.qc ul { margin: 6px 0 0; padding-left: 1.1em; }
+.qc .qct { font-size: 1.5em; }
+@media (max-width: 520px) { .qc { grid-template-columns: 1fr; } }
+select { font: inherit; color: var(--ink); width: 100%; background: #fff; border: 3px solid var(--ink); border-radius: 14px; padding: 9px 12px; }
 
 /* ------------------------------------------------ Beamer und Moderator */
 body.screen { height: 100vh; overflow: hidden; display: flex; flex-direction: column; font-size: clamp(15px, 1.25vw, 24px); }
@@ -127,7 +178,7 @@ body.screen { height: 100vh; overflow: hidden; display: flex; flex-direction: co
 .qr { width: clamp(120px, 15vw, 260px); image-rendering: pixelated; border: 3px solid var(--ink); border-radius: 12px; padding: 6px; background: #fff; }
 .pgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(clamp(90px, 9vw, 170px), 1fr)); gap: 1.2vw; align-content: start; }
 .pcard { text-align: center; font-family: var(--hand); font-size: 1.15em; line-height: 1.1; position: relative; }
-.pcard .n { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pcard .n { overflow: hidden; overflow-wrap: anywhere; font-size: .92em; }
 .pcard.off { opacity: .4; }
 .pcard .done { position: absolute; right: 6%; top: 0; background: var(--ok); color: #fff; border-radius: 999px; font-size: .8em; padding: 1px 9px 3px; }
 .pcard.in img { animation: hop .5s ease-out 1; }
@@ -142,11 +193,14 @@ body.screen { height: 100vh; overflow: hidden; display: flex; flex-direction: co
 .mrow .mid { color: var(--ink-soft); }
 .progress { height: 26px; border: 3px solid var(--ink); border-radius: 999px; overflow: hidden; background: #fff; width: min(60vw, 700px); }
 .progress > div { height: 100%; background: var(--orange); transition: width .5s; }
-.verdict { font-size: 1.15em; }
+.verdict { font-size: 1.08em; }
 .stage-center { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2.5vh; text-align: center; }
-.bigduel .fighter .figwrap { width: min(100%, 36vh); }
-.bigduel .fighter .hp { max-width: 40vh; }
-.bigduel .fighter .plate { font-size: 1.9em; }
+.bigduel .fighter .figwrap { width: min(100%, 26vh); }
+.bigduel .fighter .hp { max-width: 30vh; }
+.bigduel .fighter .plate { font-size: 1.7em; }
+.fighter .chips { font-size: .72rem; gap: 2px; flex-wrap: nowrap; }
+.fighter .chips .chip { padding: 2px 6px 3px; border-width: 1.5px; }
+@media (max-width: 700px) { .fighter:not(.x) .plate { font-size: 1.1rem; align-items: flex-start; } .fighter .plate span.n { white-space: normal; overflow-wrap: anywhere; line-height: 1.1; } }
 .podium { display: flex; align-items: flex-end; justify-content: center; gap: 1.5vw; flex: 1; min-height: 0; }
 .podium .step { text-align: center; font-family: var(--hand); width: 22%; }
 .podium .step .blk { border: 3px solid var(--ink); border-bottom: 0; border-radius: 18px 18px 0 0; background: #fff; font-size: 2.6em; padding-top: .2em; }
@@ -154,7 +208,7 @@ body.screen { height: 100vh; overflow: hidden; display: flex; flex-direction: co
 .podium .p2 .blk { height: 15vh; }
 .podium .p3 .blk { height: 10vh; }
 .podium .step img { width: min(100%, 26vh); margin: 0 auto; }
-.podium .step .nm { font-size: 1.6em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.podium .step .nm { font-size: 1.35em; line-height: 1.05; overflow-wrap: anywhere; }
 .confetti { position: fixed; top: -20px; width: 12px; height: 18px; z-index: 50; pointer-events: none; animation: fall linear forwards; }
 @keyframes fall { to { transform: translateY(110vh) rotate(720deg); } }
 

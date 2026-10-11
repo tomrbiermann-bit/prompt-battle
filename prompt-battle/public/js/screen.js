@@ -23,7 +23,7 @@ const seenAnim = new Set(), knownPlayers = new Set();
 const act = (action, extra) => api('/api/host/action', { room, token, action, ...(extra || {}) }).then(() => setErr('')).catch((e) => setErr(e.message));
 function setErr(msg) { if (refs.err) refs.err.textContent = msg; }
 
-const PHASE_LABEL = { lobby: 'Lobby', writing: 'Schreibphase', judging: 'Bewertung', reveal: 'Duelle', best: 'Bester Prompt', board: 'Rangliste', final: 'Siegerehrung' };
+const PHASE_LABEL = { lobby: 'Lobby', writing: 'Schreibphase', judging: 'Bewertung', reveal: 'Duelle', best: 'Bester Prompt', lesson: 'Baustein der Runde', board: 'Rangliste', final: 'Siegerehrung' };
 
 function onState(s) {
   state = s;
@@ -38,13 +38,14 @@ function onState(s) {
     judging: () => 'judging|' + s.round,
     reveal: () => ['reveal', s.round, s.reveal, selected, details, s.matches.map(sig).join(';')].join('|'),
     best: () => 'best|' + s.round + '|' + showOut,
+    lesson: () => 'lesson|' + s.round,
     board: () => 'board|' + s.round + '|' + s.players.map((p) => p.id + p.score).join(','),
     final: () => 'final|' + s.players.map((p) => p.id + p.score).join(',')
   }[s.phase]();
   if (key !== viewKey) { viewKey = key; const keep = refs.err; refs = { err: keep }; stage.replaceChildren(VIEWS[s.phase]()); }
   UPDATES[s.phase] && UPDATES[s.phase]();
   if (isHost) {
-    const ck = [s.phase, s.round, s.reveal >= s.matches.length, s.players.length > 0, showOut, s.demo].join('|');
+    const ck = [s.phase, s.round, s.reveal >= s.matches.length, s.players.length > 0, showOut, s.demo, s.hasLesson, s.best && s.best.output ? 1 : 0, s.roundSeconds].join('|');
     if (ck !== ctlKey) { ctlKey = ck; renderControls(); }
   }
   if (modalRefresh) modalRefresh();
@@ -65,7 +66,7 @@ function playerCard(p, opts = {}) {
   knownPlayers.add(p.id);
   return h('div', { class: 'pcard' + (p.online ? '' : ' off') + (fresh ? ' in' : '') },
     opts.done && p.submitted ? h('span', { class: 'done', text: 'fertig' }) : null,
-    figImg(p.figure), h('div', { class: 'n', text: p.name }));
+    figImg(p.figure), h('div', { class: 'n', text: dn(p) }));
 }
 
 const VIEWS = {
@@ -84,8 +85,8 @@ const VIEWS = {
             h('div', { class: 'stack' },
               h('div', {}, h('div', { class: 'muted hand', style: 'font-size:1.4em', text: '1. Seite öffnen' }), h('div', { class: 'hand', style: 'font-size:2.2em;line-height:1.1;overflow-wrap:anywhere', text: location.host })),
               h('div', {}, h('div', { class: 'muted hand', style: 'font-size:1.4em', text: '2. Raumcode eingeben' }), h('div', { class: 'code', text: state.code })),
-              h('div', { class: 'muted hand', style: 'font-size:1.4em', text: '3. Figur wählen und benennen' })))),
-        state.demo ? h('div', { class: 'banner', text: 'Demo-Modus: Es ist kein ANTHROPIC_API_KEY hinterlegt. Bewertet wird nach einer einfachen Faustregel, die Prompts werden nicht ausgeführt.' }) : null),
+              h('div', { class: 'muted hand', style: 'font-size:1.4em', text: '3. Namen eintragen, Kreatur wählen' })))),
+        isHost ? h('div', { class: 'banner', text: state.demo ? 'Standardbewertung: Der Schiedsrichter prüft jeden Prompt regelbasiert (Baustein-Check). Gewertet und genannt werden nur die Bausteine, die schon dran waren. Die Prompts verlassen den Spielserver nicht. Mit einem ANTHROPIC_API_KEY führt eine KI die Prompts zusätzlich aus und bewertet das Ergebnis.' : 'KI-Schiedsrichter aktiv: Die Prompts werden von einer KI ausgeführt und bewertet. Fällt die KI aus, springt der Baustein-Check ein.' }) : null),
       h('div', { class: 'col' }, refs.count, refs.grid));
   },
 
@@ -135,18 +136,23 @@ const VIEWS = {
           h('h2', { class: 'grow', text: cur.winner ? winnerName(cur) + ' gewinnt!' : 'Kein Sieger' }),
           cur.cheatA ? h('span', { class: 'badge orange', text: 'A: Schummelversuch erkannt' }) : null,
           cur.cheatB ? h('span', { class: 'badge orange', text: 'B: Schummelversuch erkannt' }) : null,
-          cur.manual ? h('span', { class: 'badge', text: 'vom Moderator entschieden' }) : null),
+          cur.manual ? h('span', { class: 'badge', text: 'vom Moderator entschieden' }) : null,
+          cur.fallback ? h('span', { class: 'badge', text: 'Baustein-Check statt KI' }) : null),
+        cur.checkA || cur.checkB ? h('div', { class: 'chipduel' }, ['A', 'B'].map((S) => h('div', { class: 'row', style: 'gap:8px;flex-wrap:nowrap' }, h('span', { class: 'tag', text: S }), cur['check' + S] ? chipsEl(cur['check' + S]) : h('span', { class: 'muted small', text: 'nichts abgegeben' })))) : null,
         h('p', { text: cur.reason || '' }),
         cur.error ? h('p', { class: 'error', text: 'Bewertung fehlgeschlagen: ' + cur.error }) : null,
         isHost ? h('div', { class: 'row', style: 'font-size:16px' },
-          h('button', { class: 'ghost', text: details ? 'Prompts ausblenden' : 'Prompts und Antworten zeigen', onclick: () => { details = !details; selected = cur.id; onState(state); } }),
+          h('button', { class: 'ghost', text: details ? 'Prompts ausblenden' : (cur.outA || cur.outB ? 'Prompts und Antworten zeigen' : 'Prompts zeigen'), onclick: () => { details = !details; selected = cur.id; onState(state); } }),
           h('span', { class: 'grow' }),
           cur.walkover ? null : h('button', { class: 'ghost', text: 'Neu bewerten', onclick: (ev) => { ev.target.disabled = true; ev.target.textContent = 'Bewertung läuft …'; act('rejudge', { matchId: cur.id }); } }),
           h('button', { class: 'ghost', text: 'A gewinnt', onclick: () => act('override', { matchId: cur.id, winner: 'a' }) }),
           h('button', { class: 'ghost', text: 'B gewinnt', onclick: () => act('override', { matchId: cur.id, winner: 'b' }) })) : null);
       if (animate) setTimeout(() => { verdict.style.opacity = 1; }, 2800);
       const det = details && isHost ? h('div', { class: 'cols scroll', style: 'gap:1.2vw;flex:1;font-size:.82em' }, ['A', 'B'].map((S) => h('div', { class: 'box' },
-        h('div', { class: 'hand', text: 'Prompt ' + S + ' (' + cur[S.toLowerCase()].name + ')' }), h('div', { class: 'pre', text: cur['prompt' + S] || '(nichts abgegeben)' }),
+        h('div', { class: 'hand', text: 'Prompt ' + S + ' (' + dn(cur[S.toLowerCase()]) + ')' }), cur['check' + S] ? chipsEl(cur['check' + S]) : null,
+        h('div', { class: 'pre', style: 'margin-top:6px', text: cur['prompt' + S] || '(nichts abgegeben)' }),
+        cur['strength' + S] ? h('p', {}, h('b', { text: 'Stärke: ' }), cur['strength' + S]) : null,
+        cur['tip' + S] ? h('p', {}, h('b', { class: 'orange', text: 'Tipp: ' }), cur['tip' + S]) : null,
         cur['out' + S] ? h('details', {}, h('summary', { text: 'Antwort der KI' }), h('div', { class: 'pre', text: cur['out' + S] })) : null))) : null;
       left = h('div', { class: 'col', style: 'flex:1' }, det ? null : h('div', { style: 'flex:1;display:flex;flex-direction:column;justify-content:center;min-height:0' }, duelEl(cur, { animate, big: true })), verdict, det);
     }
@@ -155,15 +161,46 @@ const VIEWS = {
       h('div', { class: 'col' },
         h('h2', { text: 'Duelle der Runde ' + state.round }),
         h('div', { class: 'mlist scroll' }, ms.map((m) => h('div', { class: 'mrow' + (m.open ? ' open' : '') + (cur && cur.id === m.id ? ' sel' : ''), onclick: m.open ? () => { selected = m.id; details = false; onState(state); } : null },
-          h('span', { class: 's ' + (m.open && m.winner === 'a' ? 'win' : m.open && m.winner ? 'lose' : ''), text: m.a.name }),
+          h('span', { class: 's ' + (m.open && m.winner === 'a' ? 'win' : m.open && m.winner ? 'lose' : ''), text: dn(m.a) }),
           h('span', { class: 'mid', text: m.open ? 'gegen' : (isHost && m.error ? '!' : '?') }),
-          h('span', { class: 's b ' + (m.open && m.winner === 'b' ? 'win' : m.open && m.winner ? 'lose' : ''), text: m.b.name })))),
+          h('span', { class: 's b ' + (m.open && m.winner === 'b' ? 'win' : m.open && m.winner ? 'lose' : ''), text: dn(m.b) })))),
+        ms.some((m) => m.open && (m.checkA || m.checkB)) ? h('div', { class: 'row', style: 'gap:8px' }, h('span', { class: 'muted small', text: 'Baustein-Check:' }), chipLegend()) : null,
         isHost && ms.some((m) => m.error) ? h('div', { class: 'banner', style: 'font-size:16px', text: 'Bei mindestens einem Duell ist die Bewertung fehlgeschlagen. Nach dem Aufdecken kannst du neu bewerten lassen oder selbst entscheiden.' }) : null));
   },
 
   best() {
     return h('div', { class: 'scroll', style: 'flex:1;display:flex;justify-content:center' },
       h('div', { style: 'width:min(1100px,100%);font-size:1.1em' }, state.best ? bestEl(state.best, { showOutput: showOut }) : h('h1', { class: 'center', text: 'In dieser Runde gibt es keinen besten Prompt.' })));
+  },
+
+  lesson() {
+    const L = state.lesson;
+    if (!L) return h('div', { class: 'stage-center' }, h('h1', { text: 'Für diese Runde gibt es keine Erklärung.' }));
+    const strip = baukastenEl(state.baukasten);
+    if (L.final) {
+      return h('div', { class: 'col', style: 'flex:1' }, strip,
+        h('div', { class: 'cols' },
+          h('div', { class: 'col' }, h('div', { class: 'card accent scroll stack', style: 'flex:1' },
+            h('div', { class: 'muted hand', style: 'font-size:1.3em', text: 'Abschluss' }), h('h1', { text: 'Der ganze Baukasten' }),
+            h('div', { class: 'row', style: 'flex-wrap:nowrap' }, h('div', { class: 'huge orange', style: 'font-size:3.4em', text: L.komplett + ' von ' + L.gesamt }), h('div', { class: 'grow', text: 'Prompts hatten alle sechs Bausteine. So oft kam jeder Baustein vor:' })),
+            h('div', { class: 'checklist big' }, L.stats.map((st) => h('div', { class: 'checkrow' },
+              h('span', { class: 'chip l2' }, h('b', { text: st.nr }), h('span', { text: st.name })), h('span', { class: 'grow' }, statBar(st)), h('span', { class: 'hand', style: 'min-width:5.2em;text-align:right', text: st.mit + ' von ' + st.gesamt }))))),
+            L.debrief ? debriefEl(L.debrief) : null),
+          h('div', { class: 'col' },
+            h('div', { class: 'card alt scroll', style: 'flex:1' }, qcEl(L.check, true)),
+            L.vergleich ? h('details', { class: 'muster' }, h('summary', { text: 'Muster-Prompt mit allen sechs Bausteinen' }), h('div', { class: 'box pre scroll', style: 'max-height:34vh;font-size:.85em', text: L.vergleich.mit })) : null)));
+    }
+    return h('div', { class: 'col', style: 'flex:1' }, strip,
+      h('div', { class: 'cols wide-left' },
+        h('div', { class: 'col' }, h('div', { class: 'card accent scroll lessoncard', style: 'flex:1' }, bausteinEl(L.baustein)), L.debrief ? debriefEl(L.debrief) : null),
+        h('div', { class: 'col' },
+          h('div', { class: 'card alt stack' },
+            h('h2', { text: 'In dieser Runde' }),
+            h('div', { class: 'row', style: 'flex-wrap:nowrap' }, h('div', { class: 'huge orange', style: 'font-size:3.4em', text: L.stat.mit + ' von ' + L.stat.gesamt }), h('div', { class: 'grow' }, 'Prompts hatten den Baustein ' + L.baustein.name + (L.stat.angedeutet ? ', bei ' + L.stat.angedeutet + ' weiteren war er angedeutet' : '') + '.')),
+            statBar(L.stat),
+            L.beispiel ? h('p', {}, h('b', { class: 'orange', text: 'Stark gelöst von ' + dn(L.beispiel) + ': ' }), '"' + L.beispiel.zitat + '"') : null),
+          L.vergleich ? h('div', { class: 'card scroll stack', style: 'flex:1;font-size:.9em' },
+            h('h3', { text: 'So sieht das im Prompt aus' }), vergleichEl(L.vergleich, { kurz: true })): null)));
   },
 
   board() {
@@ -181,12 +218,12 @@ const VIEWS = {
     const same = (x, y) => x.score === y.score && x.bonus === y.bonus && x.quality === y.quality;
     const top = ps[0] ? ps.filter((p) => same(p, ps[0])) : [];
     const close = ps[1] && top.length === 1 && ps[1].score === ps[0].score;
-    const step = (p, cls, label) => p ? h('div', { class: 'step ' + cls }, figImg(p.figure), h('div', { class: 'nm', text: p.name }), h('div', { class: 'orange', style: 'font-size:1.2em', text: p.score + (p.score === 1 ? ' Punkt' : ' Punkte') }), h('div', { class: 'blk', text: label })) : null;
+    const step = (p, cls, label) => p ? h('div', { class: 'step ' + cls }, figImg(p.figure), h('div', { class: 'nm', text: dn(p) }), h('div', { class: 'orange', style: 'font-size:1.2em', text: p.score + (p.score === 1 ? ' Punkt' : ' Punkte') }), h('div', { class: 'blk', text: label })) : null;
     if (!celebrated) { celebrated = true; setTimeout(confetti, 300); }
     return h('div', { class: 'cols wide-left' },
       h('div', { class: 'col' },
-        h('h1', { class: 'center', style: 'font-size:2.6em', text: top.length > 1 ? 'Geteilter Sieg: ' + top.map((p) => p.name).join(' und ') : ps[0] ? ps[0].name + ' gewinnt das Prompt Battle!' : 'Ende' }),
-        close ? h('p', { class: 'center muted', text: 'Punktgleich mit ' + ps[1].name + '. ' + (ps[0].bonus !== ps[1].bonus ? 'Entschieden haben die Bonuspunkte.' : 'Entschieden hat die höhere Wertung des Schiedsrichters.') }) : null,
+        h('h1', { class: 'center', style: 'font-size:2.6em', text: top.length > 1 ? 'Geteilter Sieg: ' + top.map(dn).join(' und ') : ps[0] ? dn(ps[0]) + ' gewinnt das Prompt Battle!' : 'Ende' }),
+        close ? h('p', { class: 'center muted', text: 'Punktgleich mit ' + dn(ps[1]) + '. ' + (ps[0].bonus !== ps[1].bonus ? 'Entschieden haben die Bonuspunkte.' : 'Entschieden hat die höhere Wertung des Schiedsrichters.') }) : null,
         h('div', { class: 'podium' }, step(ps[1], 'p2', '2'), step(ps[0], 'p1', '1'), step(ps[2], 'p3', '3'))),
       h('div', { class: 'col' }, h('h2', { text: 'Endstand' }), h('div', { class: 'scroll', style: 'padding:4px 8px 8px 0' }, boardEl(ps)), h('p', { class: 'small muted', text: TIE_NOTE })));
   }
@@ -229,13 +266,17 @@ function renderControls() {
   } else if (s.phase === 'writing') {
     kids = [btn('+1 Minute', () => act('addTime'), 'ghost'), manage, full, h('span', { class: 'grow' }), refs.err, btn('Runde schließen und bewerten', () => act('close'), 'primary')];
   } else if (s.phase === 'judging') {
-    kids = [h('span', { class: 'muted', text: 'Die Bewertung läuft. Das dauert je nach Teilnehmerzahl etwa 20 bis 60 Sekunden.' }), h('span', { class: 'grow' }), refs.err];
+    kids = [h('span', { class: 'muted', text: s.demo ? 'Die Bewertung läuft.' : 'Die Bewertung läuft. Das dauert je nach Teilnehmerzahl etwa 20 bis 60 Sekunden.' }), h('span', { class: 'grow' }), refs.err];
   } else if (s.phase === 'reveal') {
     const all = s.reveal >= s.matches.length;
     kids = [all ? null : btn('Alle aufdecken', () => act('revealAll'), 'ghost'), btn('Direkt zur Rangliste', () => act('board'), 'ghost'), h('span', { class: 'grow' }), refs.err,
       all ? btn('Bester Prompt der Runde', () => act('best'), 'primary') : btn('Nächstes Duell aufdecken', () => act('revealNext'), 'primary')];
   } else if (s.phase === 'best') {
-    kids = [btn(showOut ? 'Antwort der KI ausblenden' : 'Antwort der KI zeigen', () => { showOut = !showOut; onState(state); }, 'ghost'), h('span', { class: 'grow' }), refs.err, btn('Rangliste zeigen', () => act('board'), 'primary')];
+    kids = [s.best && s.best.output ? btn(showOut ? 'Antwort der KI ausblenden' : 'Antwort der KI zeigen', () => { showOut = !showOut; onState(state); }, 'ghost') : null,
+      s.hasLesson ? btn('Direkt zur Rangliste', () => act('board'), 'ghost') : null, h('span', { class: 'grow' }), refs.err,
+      s.hasLesson ? btn('Baustein der Runde erklären', () => act('lesson'), 'primary') : btn('Rangliste zeigen', () => act('board'), 'primary')];
+  } else if (s.phase === 'lesson') {
+    kids = [full, h('span', { class: 'grow' }), refs.err, btn('Rangliste zeigen', () => act('board'), 'primary')];
   } else if (s.phase === 'board') {
     const last = s.round >= s.rounds;
     kids = [manage, last ? null : cases, full, h('span', { class: 'grow' }), refs.err, btn(last ? 'Zur Siegerehrung' : 'Runde ' + (s.round + 1) + ' starten', () => act('start'), 'primary')];
@@ -260,12 +301,12 @@ function openManage() {
   const fill = () => {
     body.replaceChildren(state.players.length ? h('table', { class: 'manage' }, state.players.map((p) => h('tr', {},
       h('td', { style: 'width:3em' }, figImg(p.figure)),
-      h('td', {}, h('b', { text: p.name }), h('div', { class: 'small muted', text: (p.online ? 'verbunden' : 'nicht verbunden') + ' · ' + p.wins + ' Siege, ' + p.bonus + ' Bonus' })),
+      h('td', {}, h('b', { text: dn(p) }), h('div', { class: 'small muted', text: (p.online ? 'verbunden' : 'nicht verbunden') + ' · ' + p.wins + ' Siege, ' + p.bonus + ' Bonus' })),
       h('td', { class: 'hand', style: 'font-size:1.4rem;white-space:nowrap', text: p.score + ' P.' }),
       h('td', { style: 'white-space:nowrap;text-align:right' },
         h('button', { class: 'ghost', text: '+1', onclick: () => act('adjust', { pid: p.id, delta: 1 }) }), ' ',
         h('button', { class: 'ghost', text: '−1', onclick: () => act('adjust', { pid: p.id, delta: -1 }) }), ' ',
-        h('button', { class: 'ghost', text: 'Entfernen', onclick: () => { if (confirm(p.name + ' wirklich aus dem Raum entfernen?')) act('kick', { pid: p.id }); } }))))) : h('p', { class: 'muted', text: 'Noch niemand im Raum.' }));
+        h('button', { class: 'ghost', text: 'Entfernen', onclick: () => { if (confirm(dn(p) + ' wirklich aus dem Raum entfernen?')) act('kick', { pid: p.id }); } }))))) : h('p', { class: 'muted', text: 'Noch niemand im Raum.' }));
   };
   fill();
   modal('Teilnehmer verwalten', body);
@@ -273,12 +314,18 @@ function openManage() {
 }
 
 function openCases() {
-  const list = state.cases.map((c) => ({ ...c }));
+  const list = state.cases.map((c) => ({ ...c, stichworte: (c.stichworte || []).join(', '), minuten: c.minuten || '' }));
+  const fokusSel = (c) => {
+    const sel = h('select', {}, h('option', { value: '', text: 'kein Baustein (keine Erklärung)' }), state.bausteine.map((b) => h('option', { value: b.key, text: b.nr + '. ' + b.name })), h('option', { value: 'alle', text: 'alle sechs (Abschluss-Case)' }));
+    sel.value = c.fokus || '';
+    sel.addEventListener('change', () => { c.fokus = sel.value; });
+    return sel;
+  };
   const body = h('div', { class: 'body' });
   const err = h('span', { class: 'error small' });
   const draw = () => {
     body.replaceChildren(
-      h('p', { class: 'muted small', text: 'Gespielt werden die Cases in dieser Reihenfolge, einer pro Runde. Gibt es mehr Runden als Cases, beginnt die Liste von vorn. Das Material wird jedem Prompt beim Ausführen automatisch angehängt. Die Bewertungshinweise sieht nur der Schiedsrichter.' }),
+      h('p', { class: 'muted small', text: 'Gespielt werden die Cases in dieser Reihenfolge, einer pro Runde. Gibt es mehr Runden als Cases, beginnt die Liste von vorn. Nach jeder Runde erklärt die App den Baustein, der beim Case eingestellt ist. Er zählt in der Bewertung dreifach. Material, Stichworte und Bewertungshinweise sind optional.' }),
       ...list.map((c, i) => {
         const field = (label, key, area, ph) => { const inp = area ? h('textarea', { placeholder: ph || '' }) : h('input', { type: 'text', placeholder: ph || '' }); inp.value = c[key] || ''; inp.addEventListener('input', () => { c[key] = inp.value; }); return h('div', {}, h('label', { text: label }), inp); };
         return h('div', { class: 'caseedit' },
@@ -286,9 +333,16 @@ function openCases() {
             h('button', { class: 'ghost', text: 'nach oben', disabled: i === 0, onclick: () => { [list[i - 1], list[i]] = [list[i], list[i - 1]]; draw(); } }),
             h('button', { class: 'ghost', text: 'nach unten', disabled: i === list.length - 1, onclick: () => { [list[i + 1], list[i]] = [list[i], list[i + 1]]; draw(); } }),
             h('button', { class: 'ghost', text: 'Löschen', disabled: list.length === 1, onclick: () => { list.splice(i, 1); draw(); } })),
-          field('Titel', 'titel', false), field('Aufgabe (sehen alle)', 'aufgabe', true), field('Material (optional, sehen alle)', 'material', true, 'z. B. ein Text, eine Tabelle oder Notizen'), field('Bewertungshinweise (nur für den Schiedsrichter)', 'kriterien', true, 'Woran erkennt man ein gutes Ergebnis?'));
+          field('Titel', 'titel', false),
+          h('div', { class: 'row' }, h('div', { class: 'grow' }, h('label', { text: 'Baustein der Runde' }), fokusSel(c)), h('div', { style: 'width:11em' }, field('Minuten (leer = Standard)', 'minuten', false))),
+          field('Aufgabe (sehen alle)', 'aufgabe', true), field('Material (sehen alle, wird dem Prompt angehängt)', 'material', true, 'z. B. ein Text, eine Tabelle oder Notizen'),
+          h('details', {}, h('summary', { text: 'Bewertung und Erklärung' }),
+            field('Stichworte, die ein guter Prompt aufgreift (mit Komma trennen, Alternativen mit |)', 'stichworte', false, 'z. B. anwohner, drei wochen|3 wochen, brief'),
+            field('Bewertungshinweise für den KI-Schiedsrichter', 'kriterien', true, 'Woran erkennt man ein gutes Ergebnis?'),
+            field('Vergleichs-Prompt ohne den Baustein', 'ohne', true), field('Vergleichs-Prompt mit dem Baustein', 'mit', true),
+            field('Frage an die Runde (erscheint in der Erklärung)', 'debrief', true)));
       }),
-      h('button', { class: 'ghost', text: 'Case hinzufügen', disabled: list.length >= 12, onclick: () => { list.push({ titel: '', aufgabe: '', material: '', kriterien: '' }); draw(); } }));
+      h('button', { class: 'ghost', text: 'Case hinzufügen', disabled: list.length >= 12, onclick: () => { list.push({ titel: '', aufgabe: '', material: '', kriterien: '', fokus: '', stichworte: '', ohne: '', mit: '', debrief: '', minuten: '' }); draw(); } }));
   };
   draw();
   const close = modal('Cases bearbeiten', body, h('div', { class: 'row' }, err, h('span', { class: 'grow' }),

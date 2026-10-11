@@ -1,12 +1,12 @@
 // Gemeinsame Helfer für Teilnehmer-, Moderator- und Beameransicht.
 'use strict';
 
-const FIGS = {
-  promptling: { label: 'Promptling', hint: 'flink und präzise', faces: 'r' },
-  kontextor: { label: 'Kontextor', hint: 'hat immer Kontext dabei', faces: 'r' },
-  halluzino: { label: 'Halluzino', hint: 'erfindet gern Dinge', faces: 'l' },
-  rollux: { label: 'Rollux', hint: 'schlüpft in jede Rolle', faces: 'r' }
-};
+// Kreaturen und Bausteine kommen vom Server (/js/figures.js, gepflegt in lib/figures.js und lib/bausteine.js)
+const FIGS = Object.fromEntries(FIGURES.map((f) => [f.id, f]));
+const STUFE = ['fehlt', 'angedeutet', 'vorhanden', 'stark'];
+
+// Anzeigename: "Tom - Halluzino"
+function dn(p) { const f = p && FIGS[p.figure]; return p ? (f ? p.name + ' - ' + f.label : p.name) : ''; }
 
 // Elemente bauen, ohne je Nutzertexte als HTML zu interpretieren
 function h(tag, props, ...kids) {
@@ -80,7 +80,8 @@ function duelEl(m, { animate = false, big = false } = {}) {
     const hp = hpBar(1);
     const el = h('div', { class: 'fighter ' + pos },
       hp,
-      h('div', { class: 'plate' }, h('span', { class: 'tag', text: key.toUpperCase() }), h('span', { class: 'n', text: s.name })),
+      h('div', { class: 'plate' }, h('span', { class: 'tag', text: key.toUpperCase() }), h('span', { class: 'n', text: dn(s) })),
+      !big && m.open && m['check' + key.toUpperCase()] ? chipsEl(m['check' + key.toUpperCase()], { names: false }) : null,
       h('div', { class: 'figwrap' }, h('div', { class: 'crown', text: 'Sieg!' }), figImg(s.figure, pos)));
     el.hp = hp;
     return el;
@@ -102,7 +103,77 @@ function duelEl(m, { animate = false, big = false } = {}) {
   return el;
 }
 
-function winnerName(m) { return m.winner ? m[m.winner].name : null; }
+function winnerName(m) { return m.winner ? dn(m[m.winner]) : null; }
+
+// Baustein-Check als sechs kleine Marken: je voller, desto besser umgesetzt
+// Erklärt die vier Stufen der Marken
+function chipLegend() {
+  return h('div', { class: 'chips legend' }, STUFE.map((t, i) => h('span', { class: 'chip l' + i }, h('span', { text: t }))));
+}
+
+function chipsEl(check, opts = {}) {
+  return h('div', { class: 'chips' + (opts.big ? ' big' : '') }, BAUSTEINE.filter((b) => check.stufen[b.key] !== undefined).map((b) => {
+    const st = check.stufen[b.key] || 0;
+    return h('span', { class: 'chip l' + st, title: b.name + ': ' + STUFE[st] }, h('b', { text: b.nr }), opts.names === false ? null : h('span', { text: b.kurz }));
+  }));
+}
+
+// Erklärung eines Bausteins (nach der Runde)
+function bausteinEl(b) {
+  return h('div', { class: 'stack' },
+    h('div', { class: 'row', style: 'flex-wrap:nowrap;align-items:center' },
+      h('div', { class: 'bfig' }, figImg(b.figur)),
+      h('div', { class: 'grow' }, h('div', { class: 'muted hand', text: 'Baustein ' + b.nr + ' von 6' }), h('h1', { text: b.name }), h('div', { class: 'hand bfrage', text: b.frage }))),
+    h('p', { class: 'bkern', text: b.kern }),
+    h('div', { class: 'box so' }, h('div', { class: 'hand orange', text: 'So formulierst du' }), h('div', { text: b.so })),
+    h('div', {}, h('div', { class: 'hand', text: 'Warum dieser Baustein wirkt' }), h('div', { text: b.warum })),
+    h('div', {}, h('div', { class: 'hand', text: 'Wenn er wegfällt' }), h('div', { text: b.fehlt })));
+}
+
+function statBar(st) {
+  const pct = (n) => (st.gesamt ? Math.round((n / st.gesamt) * 100) : 0);
+  return h('div', { class: 'statbar', title: st.mit + ' vorhanden, ' + st.angedeutet + ' angedeutet, ' + (st.gesamt - st.mit - st.angedeutet) + ' fehlt' },
+    h('div', { class: 'full', style: 'width:' + pct(st.mit) + '%' }), h('div', { class: 'half', style: 'width:' + pct(st.angedeutet) + '%' }));
+}
+
+// Abschluss: der Qualitätscheck aus dem Training
+function qcEl(check, big) {
+  return h('div', { class: 'stack' },
+    h(big ? 'h2' : 'h3', { text: 'Und danach: drei Blicke auf jedes KI-Ergebnis' }),
+    h('div', { class: 'qc' }, check.map((c) => h('div', {}, h('div', { class: 'hand orange qct', text: c.titel }), h('div', { style: 'font-weight:600', text: c.frage }), h('ul', {}, c.punkte.map((x) => h('li', { text: x })))))),
+    h('p', { class: 'muted', text: 'Der beste Prompt ersetzt nicht den Blick auf das Ergebnis.' }));
+}
+
+// Vergleich ohne und mit Baustein: Was beide Prompts gemeinsam haben, steht grau, das Neue ist markiert.
+// Die Vergleichs-Prompts wachsen von Runde zu Runde, deshalb lässt sich der gemeinsame Teil kürzen (kurz: true).
+function vergleichEl(v, opts = {}) {
+  const A = v.ohne.split(/(\s+)/), B = v.mit.split(/(\s+)/);
+  let i = 0;
+  while (i < A.length && i < B.length && A[i] === B[i]) i++;
+  let j = 0;
+  while (j < A.length - i && j < B.length - i && A[A.length - 1 - j] === B[B.length - 1 - j]) j++;
+  let pre = A.slice(0, i).join(''), post = j ? A.slice(A.length - j).join('') : '';
+  const a = A.slice(i, A.length - j).join(''), b = B.slice(i, B.length - j).join('');
+  if (opts.kurz && pre.length > 220) pre = '[…] ' + pre.slice(-130).replace(/^\S*\s+/, '');
+  // ein Kasten: grau = in beiden Prompts gleich, durchgestrichen = nur ohne den Baustein, markiert = neu mit dem Baustein
+  return h('div', { class: 'vergleich' },
+    h('div', { class: 'legende' }, h('span', {}, h('span', { class: 'neu', text: 'markiert' }), ' mit dem Baustein'), a ? h('span', {}, h('span', { class: 'alt', text: 'durchgestrichen' }), ' ohne den Baustein') : null),
+    h('div', { class: 'box pre' },
+      pre ? h('span', { class: 'gleich', text: pre }) : null,
+      a ? h('span', { class: 'alt', text: a }) : null, a && b ? ' ' : null,
+      b ? h('span', { class: 'neu', text: b }) : null,
+      post ? h('span', { class: 'gleich', text: post }) : null));
+}
+
+// Frage an die Runde
+function debriefEl(text) {
+  return h('div', { class: 'debrief' }, h('div', { class: 'hand orange', text: 'Frage an die Runde' }), h('div', { text: text }));
+}
+
+// Der ganze Baukasten als Leiste: was schon erklärt wurde, ist ausgefüllt
+function baukastenEl(list) {
+  return h('div', { class: 'bkstrip' }, list.map((b) => h('div', { class: 'bk' + (b.gelernt ? ' done' : '') + (b.aktuell ? ' now' : '') }, h('b', { text: b.nr }), b.name === '?' ? '' : ' ' + b.name)));
+}
 
 function boardEl(players, meId, limit) {
   const list = limit ? players.slice(0, limit) : players;
@@ -115,7 +186,7 @@ function boardEl(players, meId, limit) {
     return h('div', { class: 'line' + (p.id === meId ? ' me' : '') + (rank === 1 ? ' first' : '') },
       h('div', { class: 'rank', text: rank + '.' }),
       figImg(p.figure),
-      h('div', { class: 'nm' }, p.name, h('div', { class: 'sub', text: p.wins + (p.wins === 1 ? ' Sieg' : ' Siege') + (p.bonus ? ', ' + p.bonus + ' Bonus' : '') + (tie && p.quality ? ' · Wertung ' + p.quality : '') })),
+      h('div', { class: 'nm' }, dn(p), h('div', { class: 'sub', text: p.wins + (p.wins === 1 ? ' Sieg' : ' Siege') + (p.bonus ? ', ' + p.bonus + ' Bonus' : '') + (tie && p.quality ? ' · Wertung ' + p.quality : '') })),
       h('div', { class: 'pts', text: p.score + (p.score === 1 ? ' Punkt' : ' Punkte') }));
   }));
 }
@@ -124,15 +195,16 @@ function bestEl(best, { showOutput = false } = {}) {
   return h('div', { class: 'card accent' },
     h('div', { class: 'row' },
       h('div', { style: 'width:5.2em;flex:none' }, figImg(best.figure)),
-      h('div', { class: 'grow' }, h('div', { class: 'muted hand', text: 'Bester Prompt der Runde' }), h('h2', { text: best.name })),
+      h('div', { class: 'grow' }, h('div', { class: 'muted hand', text: 'Bester Prompt der Runde' }), h('h2', { text: dn(best) })),
       h('span', { class: 'badge orange', text: '+1 Bonuspunkt' })),
     h('div', { class: 'box pre', style: 'margin-top:10px', text: best.prompt }),
     best.reason ? h('p', {}, h('b', { text: 'Warum: ' }), best.reason) : null,
     best.learn ? h('p', {}, h('b', { class: 'orange', text: 'Zum Mitnehmen: ' }), best.learn) : null,
+    best.check ? chipsEl(best.check) : null,
     showOutput && best.output ? h('details', { open: true }, h('summary', { text: 'Antwort der KI' }), h('div', { class: 'pre small', text: best.output })) : null);
 }
 
-const TIE_NOTE = 'Bei gleicher Punktzahl entscheiden zuerst die Bonuspunkte, dann die Wertung: die Summe der Punkte, die der Schiedsrichter deinen Prompts gegeben hat.';
+const TIE_NOTE = 'Bei gleicher Punktzahl entscheiden zuerst die Bonuspunkte, dann die Wertung: die Summe der Punkte, die der Schiedsrichter den Prompts gegeben hat.';
 
 function remaining(state) { return state.deadline ? Math.max(0, state.deadline - (Date.now() + skew)) : null; }
 function clock(ms) { const s = Math.ceil(ms / 1000); return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0'); }
