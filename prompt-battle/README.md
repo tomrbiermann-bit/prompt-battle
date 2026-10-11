@@ -2,7 +2,7 @@
 
 Ein Mini-Spiel für KI-Trainings: Die Teilnehmer tragen ihren Namen ein, wählen eine Kreatur ("Tom - Halluzino"), schreiben pro Runde einen Prompt zu einem Case und treten in zufällig ausgelosten Duellen gegeneinander an. Ein Schiedsrichter vergleicht die Prompts und begründet sein Urteil. Der Sieger bekommt einen Punkt, der beste Prompt der Runde einen Bonuspunkt. Nach jedem Case erklärt die App den Baustein des Prompt-Baukastens, um den es ging.
 
-Die App ist ein einzelner kleiner Node.js-Server ohne externe Abhängigkeiten. Teilnehmer brauchen nur einen Browser, kein Konto.
+Die App ist ein einzelner kleiner Node.js-Server. Die einzige externe Bibliothek ist pdfkit für den PDF-Bericht der Teilnehmer. Teilnehmer brauchen nur einen Browser, kein Konto.
 
 ## Die drei Ansichten
 
@@ -42,13 +42,18 @@ Beim Schreiben wissen die Teilnehmer nicht, um welchen Baustein es geht. Erst da
 ## Ablauf einer Runde
 
 1. **Schreiben:** Der Case erscheint auf dem Beamer und auf allen Geräten, der Countdown läuft. Prompts werden beim Tippen automatisch gespeichert. Läuft die Zeit ab, schließt die Runde von selbst. Mit "+1 Minute" verlängerst du, mit "Runde schließen und bewerten" beendest du früher.
-2. **Bewerten:** Die Duelle werden ausgelost und bewertet.
-3. **Aufdecken:** Du deckst die Duelle einzeln auf ("Nächstes Duell aufdecken") oder alle auf einmal. Jeder Teilnehmer sieht auf seinem Gerät sein eigenes Duell mit Begründung, einer Stärke, einem Tipp und seinem Baustein-Check, dazu beide Prompts.
-4. **Bester Prompt:** Der beste Prompt der Runde wird allen gezeigt.
-5. **Baustein der Runde:** die Erklärung zum Case.
-6. **Rangliste**, dann die nächste Runde.
+2. **Baustein der Runde:** Sobald die Runde schließt, zeigt die App die Erklärung zum Case. Währenddessen werden die Duelle im Hintergrund ausgelost und bewertet, in der Kopfzeile steht der Stand. Die Zahlen in der Erklärung kommen aus dem Baustein-Check und sind sofort da. Namen und Auslosung bleiben noch verdeckt.
+3. **Aufdecken:** Mit "Duelle aufdecken" geht es weiter. Bist du mit der Erklärung früher fertig als die Bewertung, erscheint solange der Wartebildschirm. Du deckst die Duelle einzeln auf ("Nächstes Duell aufdecken") oder alle auf einmal. Jeder Teilnehmer sieht auf seinem Gerät sein eigenes Duell mit Begründung, einer Stärke, einem Tipp und seinem Baustein-Check, dazu beide Prompts.
+4. **Bester Prompt:** Der beste Prompt der Runde wird allen gezeigt. Von hier aus lässt sich die Erklärung noch einmal aufrufen.
+5. **Rangliste**, dann die nächste Runde.
 
-Nach der letzten Runde folgt die Siegerehrung. Dort kannst du alle Ergebnisse als Datei herunterladen.
+Nach der letzten Runde folgt die Siegerehrung. Dort kannst du alle Ergebnisse als Datei herunterladen, und jeder Teilnehmer bekommt auf seinem Gerät den Knopf "Meinen Bericht als PDF herunterladen".
+
+## Der Bericht für Teilnehmer
+
+Der Bericht ist ein PDF im Stil der App, mit der gewählten Kreatur auf dem Deckblatt. Er enthält Platz und Punkte, den Verlauf im Baukasten über alle Runden, und für jede Runde den eigenen Prompt, den Baustein-Check, Urteil, Stärke und Tipp, mit KI-Schiedsrichter auch die Antwort der KI auf den eigenen Prompt. Am Ende steht der Prompt-Baukasten zum Mitnehmen samt Qualitätscheck. Prompts der Gegner stehen nicht darin.
+
+Als Moderator kannst du den Bericht jedes Teilnehmers unter "Teilnehmer verwalten" laden, zum Beispiel wenn jemand die Seite schon geschlossen hat. Wichtig: Die Berichte entstehen aus dem Spielstand auf dem Server. Im kostenlosen Render-Tarif geht er verloren, sobald der Dienst einschläft oder neu startet. Die Teilnehmer sollten den Bericht deshalb gleich bei der Siegerehrung herunterladen.
 
 Zeitbedarf: Bei 4 Minuten Schreibzeit dauert eine Runde mit Aufdecken und Erklärung etwa 10 Minuten. Wer weniger Zeit hat, stellt in der Lobby weniger Runden ein oder löscht einzelne Cases. Weil der Prompt von Runde zu Runde wächst, haben die späteren Cases mehr Schreibzeit: Case 4 und 5 je 5 Minuten, Case 6 6 Minuten, der Final Case 8 Minuten. Damit dauert das ganze Battle etwa 80 Minuten. Stichpunkte im Prompt sind erlaubt und sparen Zeit.
 
@@ -83,6 +88,7 @@ Daraus entstehen Punkte von 0 bis 100, das Urteil mit dem Baustein, der den Unte
 ### KI-Schiedsrichter (mit `ANTHROPIC_API_KEY`)
 
 - Jeder Prompt wird mit dem Modell aus `MODEL_RUN` ausgeführt. Das Material des Cases wird dem Prompt automatisch angehängt.
+- **Tempo:** Ausführung und Urteil laufen mit Claude Sonnet und der Einstellung `EFFORT=low` (wenig Aufwand, kein vorgeschaltetes Nachdenken), die Antworten sind auf etwa 200 Wörter begrenzt, und alle Duelle einer Runde werden gleichzeitig bewertet. Außerdem läuft die Bewertung im Hintergrund, während du den Baustein erklärst. Lehnt die API eine der Tempo-Angaben ab, lässt die App sie weg und macht weiter. Wie lange eine Runde gebraucht hat, steht im Server-Log.
 - Der Schiedsrichter (`MODEL_JUDGE`) sieht den Case, die bisher behandelten Bausteine, den Baustein der Runde, die Bewertungshinweise, beide Prompts und beide Antworten, aber keine Namen. Welcher Prompt "A" und welcher "B" ist, wird zufällig gewürfelt, damit keine Seite einen Positionsvorteil hat.
 - Gewertet werden je etwa zur Hälfte das Ergebnis und das Prompt-Handwerk nach den bisher behandelten Bausteinen. Der Schiedsrichter ist angewiesen, nur diese beim Namen zu nennen. Eine KI hält sich daran fast immer, aber nicht garantiert. Die Standardbewertung hält die Regel sicher ein.
 - Der Baustein-Check läuft zusätzlich mit und liefert die Marken und die Zahlen für die Erklärung nach der Runde.
@@ -118,8 +124,11 @@ Mehrere Teilnehmer dürfen dieselbe Kreatur wählen, die Auswahl zeigt, wie oft 
 Voraussetzung: Node.js 20 oder neuer.
 
 ```bash
+npm install
 ADMIN_PASSWORD=geheim node server.js
 ```
+
+`npm install` lädt die Bibliothek für den PDF-Bericht. Ohne diesen Schritt läuft das Spiel auch, nur der Bericht fehlt dann.
 
 Dann `http://localhost:3000/host` öffnen. Ohne `ANTHROPIC_API_KEY` läuft die Standardbewertung.
 
@@ -134,8 +143,8 @@ ANTHROPIC_API_KEY=sk-ant-... ADMIN_PASSWORD=geheim node server.js
 1. **Code zu GitHub bringen:** Ein Repository anlegen und den Inhalt dieses Ordners hochladen (im Browser über "Add file" und "Upload files" oder per Git). Wichtig: die Dateien selbst hochladen, nicht die ZIP-Datei.
 2. **Dienst anlegen:** In Render "New" und "Web Service" wählen, das GitHub-Konto verbinden und das Repository auswählen. Einstellungen:
    - Language: `Node`
-   - Build Command: `npm install`
-   - Start Command: `node server.js`
+   - Build Command: `npm install` (liegt die App wie beim Hochladen über den Browser in einem Unterordner: `cd prompt-battle && npm install`)
+   - Start Command: `node server.js` (im Unterordner: `cd prompt-battle && node server.js`)
    - Region: Frankfurt
    - Health Check Path (unter "Advanced"): `/api/ping`
 3. **Umgebungsvariablen setzen** (unter "Environment"): `ADMIN_PASSWORD`, und nur wenn der KI-Schiedsrichter gewünscht ist, `ANTHROPIC_API_KEY`.
@@ -166,7 +175,8 @@ docker run -p 3000:3000 -e ADMIN_PASSWORD=geheim -v prompt-battle-data:/app/data
 | --- | --- | --- |
 | `ADMIN_PASSWORD` | Passwort, mit dem auf `/host` Räume eröffnet werden. Fehlt es, erzeugt der Server bei jedem Start ein zufälliges und schreibt es ins Log. | zufällig |
 | `ANTHROPIC_API_KEY` | API-Schlüssel für den KI-Schiedsrichter. Fehlt er, läuft die Standardbewertung ohne KI. | leer |
-| `MODEL_RUN` | Modell, das die Prompts der Teilnehmer ausführt | `claude-haiku-5-5` |
+| `MODEL_RUN` | Modell, das die Prompts der Teilnehmer ausführt | `claude-sonnet-5-5` |
+| `EFFORT` | Aufwand der KI pro Antwort: `low`, `medium` oder `high`. Mehr Aufwand ist gründlicher und langsamer. `aus` lässt die Angabe weg. | `low` |
 | `MODEL_JUDGE` | Modell des Schiedsrichters | `claude-sonnet-5-5` |
 | `PORT` | Port des Servers (Render setzt ihn selbst) | `3000` |
 | `DATA_DIR` | Ordner für den gespeicherten Spielstand | `./data` |
@@ -219,6 +229,8 @@ server.js          Webserver, Schnittstellen, Live-Updates
 lib/game.js        Spiellogik: Räume, Runden, Auslosung, Punkte, wer was sehen darf
 lib/rubrik.js      Standardbewertung ohne KI (Baustein-Check)
 lib/judge.js       KI-Schiedsrichter: Ausführen, Urteil, bester Prompt
+lib/report.js      PDF-Bericht für Teilnehmer
+assets/fonts/      Schriften für den PDF-Bericht
 lib/bausteine.js   Die sechs Bausteine mit den Texten aus dem Training
 lib/cases.js       Voreingestellte Cases
 lib/figures.js     Die Kreaturen (hier erweitern)

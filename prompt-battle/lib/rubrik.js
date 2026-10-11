@@ -322,7 +322,9 @@ function duell(a, b, c) {
   }
   const w = sieger === 'A' ? a : b, l = sieger === 'A' ? b : a, L = sieger === 'A' ? 'B' : 'A';
   const diff = K.map((k) => ({ k, d: G[k] * (WERT[w.stufen[k]] - WERT[l.stufen[k]]) })).sort((x, y) => y.d - x.d)[0];
-  const gleichauf = K.length === 1 ? '' : ' Bei den bisher behandelten Bausteinen liegen beide gleichauf.';
+  // Gewinnt ein Prompt über Fakten oder Technik, obwohl der andere bei den Bausteinen vorn liegt, soll das Urteil das auch sagen
+  const vorn = K.some((k) => G[k] * (WERT[l.stufen[k]] - WERT[w.stufen[k]]) > 0);
+  const gleichauf = K.length === 1 ? '' : vorn ? ' Bei den Bausteinen liegt Prompt ' + L + ' sogar leicht vorn.' : ' Bei den bisher behandelten Bausteinen liegen beide gleichauf.';
   let text;
   if (K.length === 1) {
     const k = K[0];

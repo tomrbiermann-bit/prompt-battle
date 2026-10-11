@@ -41,6 +41,7 @@ button:hover, .btn:hover { transform: translate(-1px, -1px); box-shadow: 4px 5px
 button:active, .btn:active { transform: translate(2px, 3px); box-shadow: 1px 1px 0 rgba(70, 78, 82, .3); }
 button.primary, .btn.primary { background: var(--orange); color: #fff; }
 button.ghost { border-width: 2px; box-shadow: none; font-size: 1.05rem; padding: 6px 12px 8px; }
+.btn.ghostlink { border-width: 2px; box-shadow: none; font-size: 1.05rem; padding: 6px 12px 8px; }
 button:disabled { opacity: .45; cursor: not-allowed; transform: none; }
 button:focus-visible, input:focus-visible, textarea:focus-visible, .figpick:focus-visible { outline: 3px solid var(--orange); outline-offset: 2px; }
 

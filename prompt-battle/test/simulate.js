@@ -16,6 +16,7 @@ const FOKUS = ['Rolle', 'Aufgabe', 'Kontext', 'Anforderungen', 'Ausgabeformat', 
 const PORT = 4100 + Math.floor(Math.random() * 500);
 const MOCK_PORT = PORT + 1000;
 const BASE = 'http://127.0.0.1:' + PORT;
+const i3 = (r) => false; // Spieler 0 gibt in jeder Runde ab
 const assert = (c, msg) => { if (!c) { console.error('FEHLER: ' + msg); process.exitCode = 1; throw new Error(msg); } };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const post = async (p, body) => { const r = await fetch(BASE + p, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }); const j = await r.json(); if (!r.ok) throw new Error(p + ': ' + j.error); return j; };
@@ -36,7 +37,7 @@ async function state(query) {
 }
 
 let runde = 0; // aktuelle Runde, damit der Testserver prüfen kann, welche Bausteine genannt werden
-let mockCalls = { run: 0, judge: 0, best: 0, failed: 0, broken: 0 };
+let mockCalls = { run: 0, judge: 0, best: 0, failed: 0, broken: 0, thinkingRejected: 0 };
 function startMock() {
   let first = true;
   return http.createServer((req, res) => {
@@ -47,9 +48,19 @@ function startMock() {
       assert(req.headers['x-api-key'] === 'test-key', 'API-Schlüssel fehlt in der Anfrage');
       assert(req.headers['anthropic-version'], 'anthropic-version fehlt');
       if (first) { first = false; mockCalls.failed++; res.writeHead(529, { 'content-type': 'application/json' }); return res.end('{"type":"error","error":{"type":"overloaded_error"}}'); }
+      // Tempo-Angaben: wenig Aufwand bei jedem Aufruf. Die Angabe zum Nachdenken lehnt dieser Testserver ab,
+      // danach muss die App ohne sie weiterarbeiten.
+      assert(body.output_config && body.output_config.effort === 'low', 'Aufruf ohne output_config.effort = low');
+      assert(body.model === 'claude-sonnet-5-5', 'Unerwartetes Modell: ' + body.model);
+      if (body.thinking) {
+        assert(runde === 0, 'Die abgelehnte Angabe zum Nachdenken wurde in Runde ' + (runde + 1) + ' wieder gesendet');
+        mockCalls.thinkingRejected++;
+        res.writeHead(400, { 'content-type': 'application/json' });
+        return res.end('{"type":"error","error":{"type":"invalid_request_error","message":"thinking.type: unsupported value for this model"}}');
+      }
       let text;
       const user = body.messages[0].content;
-      if (body.output_config) {
+      if (body.output_config && body.output_config.format) {
         const props = body.output_config.format.schema.properties;
         if (props.sieger) {
           mockCalls.judge++;
@@ -86,6 +97,7 @@ const PROMPTS = [
   if (MOCK) Object.assign(env, { ANTHROPIC_API_KEY: 'test-key', ANTHROPIC_BASE_URL: 'http://127.0.0.1:' + MOCK_PORT });
   const srv = spawn(process.execPath, [path.join(__dirname, '..', 'server.js')], { env, stdio: ['ignore', 'pipe', 'inherit'] });
   srv.stdout.on('data', () => {});
+  process.on('exit', () => { try { srv.kill(); } catch (_) {} }); // auch bei einem Absturz des Tests keinen Server zurücklassen
   try {
     for (let i = 0; i < 50; i++) { try { await fetch(BASE + '/api/ping'); break; } catch (_) { await sleep(100); } }
 
@@ -133,8 +145,42 @@ const PROMPTS = [
       // einer gibt nichts ab (kampfloser Sieg), alle anderen schon
       for (let i = 0; i < N; i++) if (!(r === 1 && i === 3)) await post('/api/submit', { room, pid: players[i].pid, key: players[i].key, text: PROMPTS[(i + r) % PROMPTS.length] + ' #' + i });
       await host('close');
-      for (let t = 0; t < 300; t++) { s = await state('room=' + room + '&token=' + token); if (s.phase === 'reveal') break; await sleep(100); }
-      assert(s.phase === 'reveal', 'Bewertung wurde nicht fertig');
+      // Neu: Erst kommt die Erklärung des Bausteins, währenddessen wird im Hintergrund bewertet.
+      let ps = await state('room=' + room + '&pid=' + players[0].pid + '&key=' + players[0].key);
+      assert(ps.phase === 'lesson' && ps.lesson, 'Erklärung nach dem Schreiben fehlt, Phase: ' + ps.phase);
+      assert(ps.matches.length === 0 && !ps.best && !ps.revealed, 'Duelle oder Auslosung sind während der Erklärung sichtbar');
+      assert(!ps.lesson.beispiel || ps.lesson.beispiel.name === undefined, 'Die Erklärung nennt vor dem Aufdecken einen Namen');
+      assert(i3(r) ? ps.myCheck === null || ps.myCheck : ps.myCheck && ps.myCheck.stufen.rolle !== undefined && Object.keys(ps.myCheck.stufen).length === Math.min(r + 1, 6), 'Eigener Baustein-Check fehlt in der Erklärung');
+      if (r < 6) {
+        assert(!ps.lesson.final && ps.lesson.baustein.name === FOKUS[r], 'Falscher Baustein in Runde ' + (r + 1) + ': ' + (ps.lesson.baustein && ps.lesson.baustein.name));
+        assert(ps.lesson.baustein.so && ps.lesson.baustein.warum && ps.lesson.baustein.fehlt, 'Erklärtexte fehlen');
+        assert(ps.lesson.stat.gesamt === N - (r === 1 ? 1 : 0), 'Zahl der Prompts in der Erklärung stimmt nicht: ' + ps.lesson.stat.gesamt);
+        assert(ps.lesson.vergleich && ps.lesson.vergleich.mit, 'Vergleichs-Prompts fehlen');
+        assert(ps.lesson.debrief, 'Frage an die Runde fehlt');
+        assert(ps.baukasten.filter((b) => b.gelernt).length === r + 1 && ps.baukasten[r].aktuell, 'Fortschritt im Baukasten stimmt nicht');
+        assert(ps.baukasten.slice(r + 1).every((b) => b.name === '?'), 'Namen künftiger Bausteine sind sichtbar');
+      } else {
+        assert(ps.lesson.final && ps.lesson.stats.length === 6 && ps.lesson.check.length === 3, 'Abschluss-Erklärung unvollständig');
+        assert(ps.baukasten.every((b) => b.gelernt), 'Am Ende müssen alle Bausteine erklärt sein');
+      }
+      // Die Rangliste ist vor dem Aufdecken gesperrt
+      denied = false;
+      try { await host('board'); } catch (_) { denied = true; }
+      assert(denied, 'Rangliste war vor dem Aufdecken erreichbar');
+      if (r % 2 === 0) {
+        // Moderator geht weiter, während noch bewertet wird: Wartebildschirm, danach wird von selbst aufgedeckt
+        await host('reveal');
+        s = await state('room=' + room + '&token=' + token);
+        assert(s.phase === 'judging' || s.phase === 'reveal', 'Weitergehen während der Bewertung: Phase ' + s.phase);
+        for (let t = 0; t < 400; t++) { s = await state('room=' + room + '&token=' + token); if (s.phase === 'reveal') break; await sleep(100); }
+      } else {
+        // Moderator erklärt zu Ende, die Bewertung ist dann fertig
+        for (let t = 0; t < 400; t++) { s = await state('room=' + room + '&token=' + token); if (!s.judging) break; await sleep(100); }
+        assert(s.phase === 'lesson' && !s.judging, 'Bewertung wurde im Hintergrund nicht fertig');
+        await host('reveal');
+        s = await state('room=' + room + '&token=' + token);
+      }
+      assert(s.phase === 'reveal' && s.revealed, 'Aufdecken nach der Erklärung klappt nicht, Phase: ' + s.phase);
       assert(s.matches.length === Math.ceil(N / 2), 'Anzahl der Duelle stimmt nicht: ' + s.matches.length);
       const seen = new Set();
       for (const m of s.matches) {
@@ -153,7 +199,7 @@ const PROMPTS = [
       }
       assert(seen.size === N, 'Nicht alle Spieler wurden ausgelost');
       // Teilnehmer sehen vor dem Aufdecken keine Ergebnisse und keine fremden Prompts
-      let ps = await state('room=' + room + '&pid=' + players[0].pid + '&key=' + players[0].key);
+      ps = await state('room=' + room + '&pid=' + players[0].pid + '&key=' + players[0].key);
       assert(ps.matches.every((m) => !m.open && m.winner === undefined && m.promptA === undefined), 'Ergebnis vor dem Aufdecken sichtbar');
       assert(ps.players.every((p) => p.score === s.players.find((x) => x.id === p.id).score), 'Punktestand uneinheitlich');
       const before = ps.players.reduce((a, p) => a + p.score, 0);
@@ -171,21 +217,12 @@ const PROMPTS = [
       assert(ps.best.check && ps.best.check.gesamt === Math.min(r + 1, 6) && ps.best.check.anzahl === ps.best.check.gesamt, 'Bester Prompt: Baustein-Check stimmt nicht: ' + JSON.stringify(ps.best.check));
       if (!MOCK) for (const name of FOKUS.slice(Math.min(r + 1, 6))) assert(!new RegExp('Baustein ' + name + '|bei [^.]*' + name).test(ps.best.reason + ' ' + ps.best.learn), 'Bester Prompt nimmt den Baustein ' + name + ' vorweg');
       bonus++;
-      // Erklärung des Bausteins nach dem Case
-      await host('lesson');
-      ps = await state('room=' + room + '&pid=' + players[0].pid + '&key=' + players[0].key);
-      assert(ps.phase === 'lesson' && ps.lesson, 'Erklärung nach der Runde fehlt');
-      if (r < 6) {
-        assert(!ps.lesson.final && ps.lesson.baustein.name === FOKUS[r], 'Falscher Baustein in Runde ' + (r + 1) + ': ' + (ps.lesson.baustein && ps.lesson.baustein.name));
-        assert(ps.lesson.baustein.so && ps.lesson.baustein.warum && ps.lesson.baustein.fehlt, 'Erklärtexte fehlen');
-        assert(ps.lesson.stat.gesamt === N - (r === 1 ? 1 : 0), 'Zahl der Prompts in der Erklärung stimmt nicht: ' + ps.lesson.stat.gesamt);
-        assert(ps.lesson.vergleich && ps.lesson.vergleich.mit, 'Vergleichs-Prompts fehlen');
-        assert(ps.lesson.debrief, 'Frage an die Runde fehlt');
-        assert(ps.baukasten.filter((b) => b.gelernt).length === r + 1 && ps.baukasten[r].aktuell, 'Fortschritt im Baukasten stimmt nicht');
-        assert(ps.baukasten.slice(r + 1).every((b) => b.name === '?'), 'Namen künftiger Bausteine sind sichtbar');
-      } else {
-        assert(ps.lesson.final && ps.lesson.stats.length === 6 && ps.lesson.check.length === 3, 'Abschluss-Erklärung unvollständig');
-        assert(ps.baukasten.every((b) => b.gelernt), 'Am Ende müssen alle Bausteine erklärt sein');
+      // Die Erklärung lässt sich nach den Duellen noch einmal zeigen, dann mit Namen
+      if (r === 0) {
+        await host('lesson');
+        ps = await state('room=' + room + '&pid=' + players[0].pid + '&key=' + players[0].key);
+        assert(ps.phase === 'lesson' && ps.revealed && ps.matches.length > 0, 'Erklärung noch einmal zeigen klappt nicht');
+        assert(!ps.lesson.beispiel || ps.lesson.beispiel.name, 'Nach dem Aufdecken darf der Name beim Beispiel stehen');
       }
       await host('board');
       s = await state('room=' + room + '&token=' + token);
@@ -206,8 +243,21 @@ const PROMPTS = [
     const exp = await (await fetch(BASE + '/api/export?room=' + room + '&token=' + token)).json();
     assert(exp.runden.length === ROUNDS && exp.rangliste.length === N, 'Export unvollständig');
     assert(exp.rangliste.every((p) => p.kreatur) && / - /.test(exp.runden[0].duelle[0].a), 'Kreaturen fehlen im Export');
+    // Persönlicher Bericht als PDF: für den Teilnehmer selbst und für die Moderation, nicht für Fremde
+    if (info.report) {
+      const mine = await fetch(BASE + '/api/report?room=' + room + '&pid=' + players[1].pid + '&key=' + players[1].key);
+      const buf = Buffer.from(await mine.arrayBuffer());
+      assert(mine.status === 200 && mine.headers.get('content-type') === 'application/pdf' && buf.slice(0, 5).toString() === '%PDF-' && buf.length > 20000, 'PDF-Bericht fehlt oder ist leer (' + mine.status + ', ' + buf.length + ' Bytes)');
+      assert(/attachment; filename="prompt-battle-bericht-spieler-2\.pdf"/.test(mine.headers.get('content-disposition')), 'Dateiname des Berichts stimmt nicht: ' + mine.headers.get('content-disposition'));
+      if (process.env.REPORT_OUT) fs.writeFileSync(process.env.REPORT_OUT, buf);
+      const fremd = await fetch(BASE + '/api/report?room=' + room + '&pid=' + players[1].pid + '&key=falsch');
+      assert(fremd.status === 400, 'Bericht war mit falschem Schlüssel abrufbar');
+      const mod = await fetch(BASE + '/api/report?room=' + room + '&pid=' + players[3].pid + '&token=' + token);
+      assert(mod.status === 200 && mod.headers.get('content-type') === 'application/pdf', 'Moderation kann den Bericht nicht abrufen');
+    } else console.log('Hinweis: PDF-Bericht nicht getestet (npm install fehlt).');
     if (MOCK) {
       assert(mockCalls.failed === 1, 'Wiederholung nach Überlastung nicht getestet');
+      assert(mockCalls.thinkingRejected >= 1, 'Abgelehnte Tempo-Angabe wurde nicht getestet');
       assert(mockCalls.broken === 1 && fallbacks === 1, 'Ausfall der KI: Standardbewertung ist nicht eingesprungen (' + fallbacks + ')');
       assert(mockCalls.best === ROUNDS, 'Bester Prompt wurde nicht über die API gewählt: ' + mockCalls.best);
       assert(mockCalls.run >= ROUNDS * (N - 1), 'Zu wenige Ausführungen: ' + mockCalls.run);

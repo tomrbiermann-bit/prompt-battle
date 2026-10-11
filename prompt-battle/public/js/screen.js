@@ -27,7 +27,8 @@ const PHASE_LABEL = { lobby: 'Lobby', writing: 'Schreibphase', judging: 'Bewertu
 
 function onState(s) {
   state = s;
-  document.getElementById('roundinfo').textContent = (s.round ? 'Runde ' + s.round + ' von ' + s.rounds + ' · ' : '') + PHASE_LABEL[s.phase];
+  const lauf = s.phase === 'lesson' && !s.revealed ? (s.judging ? ' · Bewertung läuft' + (s.progress ? (s.progress.done >= s.progress.total - 1 ? ' (bester Prompt wird gekürt)' : ' (' + s.progress.done + ' von ' + (s.progress.total - 1) + ' Duellen)') : '') : ' · Bewertung fertig') : '';
+  document.getElementById('roundinfo').textContent = (s.round ? 'Runde ' + s.round + ' von ' + s.rounds + ' · ' : '') + PHASE_LABEL[s.phase] + lauf;
   document.getElementById('joininfo').replaceChildren('Mitspielen: ', h('b', { text: location.host }), ' · Code ', h('b', { class: 'orange', text: s.code }));
   const rv = s.round + ':' + s.reveal;
   if (rv !== lastReveal) { lastReveal = rv; selected = null; details = false; }
@@ -38,14 +39,14 @@ function onState(s) {
     judging: () => 'judging|' + s.round,
     reveal: () => ['reveal', s.round, s.reveal, selected, details, s.matches.map(sig).join(';')].join('|'),
     best: () => 'best|' + s.round + '|' + showOut,
-    lesson: () => 'lesson|' + s.round,
+    lesson: () => 'lesson|' + s.round + '|' + s.revealed,
     board: () => 'board|' + s.round + '|' + s.players.map((p) => p.id + p.score).join(','),
     final: () => 'final|' + s.players.map((p) => p.id + p.score).join(',')
   }[s.phase]();
   if (key !== viewKey) { viewKey = key; const keep = refs.err; refs = { err: keep }; stage.replaceChildren(VIEWS[s.phase]()); }
   UPDATES[s.phase] && UPDATES[s.phase]();
   if (isHost) {
-    const ck = [s.phase, s.round, s.reveal >= s.matches.length, s.players.length > 0, showOut, s.demo, s.hasLesson, s.best && s.best.output ? 1 : 0, s.roundSeconds].join('|');
+    const ck = [s.phase, s.round, s.reveal >= s.matches.length, s.players.length > 0, showOut, s.demo, s.hasLesson, s.best && s.best.output ? 1 : 0, s.roundSeconds, s.judging, s.revealed].join('|');
     if (ck !== ctlKey) { ctlKey = ck; renderControls(); }
   }
   if (modalRefresh) modalRefresh();
@@ -198,7 +199,7 @@ const VIEWS = {
             h('h2', { text: 'In dieser Runde' }),
             h('div', { class: 'row', style: 'flex-wrap:nowrap' }, h('div', { class: 'huge orange', style: 'font-size:3.4em', text: L.stat.mit + ' von ' + L.stat.gesamt }), h('div', { class: 'grow' }, 'Prompts hatten den Baustein ' + L.baustein.name + (L.stat.angedeutet ? ', bei ' + L.stat.angedeutet + ' weiteren war er angedeutet' : '') + '.')),
             statBar(L.stat),
-            L.beispiel ? h('p', {}, h('b', { class: 'orange', text: 'Stark gelöst von ' + dn(L.beispiel) + ': ' }), '"' + L.beispiel.zitat + '"') : null),
+            L.beispiel ? h('p', {}, h('b', { class: 'orange', text: (L.beispiel.name ? 'Stark gelöst von ' + dn(L.beispiel) : 'Stark gelöst in einem eurer Prompts') + ': ' }), '"' + L.beispiel.zitat + '"') : null),
           L.vergleich ? h('div', { class: 'card scroll stack', style: 'flex:1;font-size:.9em' },
             h('h3', { text: 'So sieht das im Prompt aus' }), vergleichEl(L.vergleich, { kurz: true })): null)));
   },
@@ -273,15 +274,20 @@ function renderControls() {
       all ? btn('Bester Prompt der Runde', () => act('best'), 'primary') : btn('Nächstes Duell aufdecken', () => act('revealNext'), 'primary')];
   } else if (s.phase === 'best') {
     kids = [s.best && s.best.output ? btn(showOut ? 'Antwort der KI ausblenden' : 'Antwort der KI zeigen', () => { showOut = !showOut; onState(state); }, 'ghost') : null,
-      s.hasLesson ? btn('Direkt zur Rangliste', () => act('board'), 'ghost') : null, h('span', { class: 'grow' }), refs.err,
-      s.hasLesson ? btn('Baustein der Runde erklären', () => act('lesson'), 'primary') : btn('Rangliste zeigen', () => act('board'), 'primary')];
+      s.hasLesson ? btn('Baustein noch einmal zeigen', () => act('lesson'), 'ghost') : null, h('span', { class: 'grow' }), refs.err,
+      btn('Rangliste zeigen', () => act('board'), 'primary')];
   } else if (s.phase === 'lesson') {
-    kids = [full, h('span', { class: 'grow' }), refs.err, btn('Rangliste zeigen', () => act('board'), 'primary')];
+    // Die Erklärung kommt vor den Duellen: Solange du erklärst, wird im Hintergrund bewertet.
+    kids = s.revealed
+      ? [full, h('span', { class: 'grow' }), refs.err, btn('Rangliste zeigen', () => act('board'), 'primary')]
+      : [full, h('span', { class: 'muted', text: s.judging ? 'Die Bewertung läuft im Hintergrund. Du kannst in Ruhe erklären.' : 'Die Bewertung ist fertig.' }), h('span', { class: 'grow' }), refs.err,
+        btn(s.judging ? 'Weiter, auch wenn noch bewertet wird' : 'Duelle aufdecken', () => act('reveal'), s.judging ? '' : 'primary')];
   } else if (s.phase === 'board') {
     const last = s.round >= s.rounds;
     kids = [manage, last ? null : cases, full, h('span', { class: 'grow' }), refs.err, btn(last ? 'Zur Siegerehrung' : 'Runde ' + (s.round + 1) + ' starten', () => act('start'), 'primary')];
   } else if (s.phase === 'final') {
-    kids = [h('a', { class: 'btn', href: '/api/export?room=' + room + '&token=' + token, text: 'Ergebnisse herunterladen' }), h('span', { class: 'grow' }), refs.err, h('a', { class: 'btn', href: '/host', text: 'Neuer Raum' })];
+    kids = [h('a', { class: 'btn', href: '/api/export?room=' + room + '&token=' + token, text: 'Ergebnisse herunterladen' }), manage,
+      state.report ? h('span', { class: 'muted small', text: 'Jeder Teilnehmer kann jetzt auf seinem Gerät seinen Bericht als PDF laden.' }) : null, h('span', { class: 'grow' }), refs.err, h('a', { class: 'btn', href: '/host', text: 'Neuer Raum' })];
   }
   controls.replaceChildren(...kids.filter(Boolean));
 }
@@ -306,6 +312,7 @@ function openManage() {
       h('td', { style: 'white-space:nowrap;text-align:right' },
         h('button', { class: 'ghost', text: '+1', onclick: () => act('adjust', { pid: p.id, delta: 1 }) }), ' ',
         h('button', { class: 'ghost', text: '−1', onclick: () => act('adjust', { pid: p.id, delta: -1 }) }), ' ',
+        state.report && state.round > 0 ? h('a', { class: 'btn ghostlink', href: '/api/report?room=' + room + '&token=' + token + '&pid=' + p.id, download: '', title: 'Bericht dieses Teilnehmers als PDF', text: 'Bericht' }) : null, ' ',
         h('button', { class: 'ghost', text: 'Entfernen', onclick: () => { if (confirm(dn(p) + ' wirklich aus dem Raum entfernen?')) act('kick', { pid: p.id }); } }))))) : h('p', { class: 'muted', text: 'Noch niemand im Raum.' }));
   };
   fill();

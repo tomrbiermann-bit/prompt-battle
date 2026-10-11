@@ -9,6 +9,8 @@ const { FIGURE_IDS, labelOf, displayName } = require('./figures');
 const { BAUSTEINE, QUALITAETSCHECK, KEYS, byKey, ALLE } = require('./bausteine');
 
 const FIGURES = FIGURE_IDS;
+let reportOk = false;
+try { reportOk = require('./report').available(); } catch (_) { /* Bericht nicht verfügbar */ }
 const BOT = 'bot';
 const BOT_NAME = 'Hausgegner';
 const BOT_FIGURE = 'halluzino';
@@ -47,7 +49,7 @@ function createRoom() {
     settings: { rounds: Math.min(12, DEFAULT_CASES.length), seconds: 240 },
     cases: clone(DEFAULT_CASES),
     players: {}, rounds: [], met: {}, botGames: {}, adjust: {},
-    deadline: null, reveal: 0, progress: null
+    deadline: null, reveal: 0, progress: null, judging: false
   };
   attach(room);
   rooms.set(room.code, room);
@@ -96,9 +98,9 @@ function load() {
     const list = JSON.parse(fs.readFileSync(STATE_FILE, 'utf8'));
     for (const room of list) {
       attach(room);
-      if (room.phase === 'judging') { // Bewertung wurde durch Neustart unterbrochen
-        room.phase = 'writing'; room.deadline = null; room.progress = null;
-        const r = room.rounds[room.roundIndex]; if (r) { r.matches = []; r.best = null; }
+      if (room.phase === 'judging' || room.judging) { // Bewertung wurde durch Neustart unterbrochen
+        room.phase = 'writing'; room.deadline = null; room.progress = null; room.judging = false;
+        const r = room.rounds[room.roundIndex]; if (r) { r.matches = []; r.best = null; r.lesson = null; r.lessonShown = false; r.revealed = false; }
       }
       rooms.set(room.code, room);
       armTimer(room);
@@ -145,13 +147,17 @@ function submit(room, pid, key, text) {
   changed(room);
 }
 
+// Sind in der laufenden Runde alle Duelle aufgedeckt? Die Erklärung des Bausteins kommt jetzt VOR den Duellen
+// (während im Hintergrund bewertet wird), deshalb zählt die Phase "lesson" nur, wenn schon aufgedeckt wurde.
+const allesOffen = (room, r) => ['best', 'board', 'final'].includes(room.phase) || (room.phase === 'lesson' && !!(r && r.revealed));
+
 // ---------------------------------------------------------------- Punkte (werden immer komplett neu berechnet)
 function recompute(room) {
   const P = room.players;
   for (const p of Object.values(P)) { p.score = 0; p.wins = 0; p.bonus = 0; p.quality = 0; }
   room.rounds.forEach((r, i) => {
     const current = i === room.roundIndex;
-    const allOpen = !current || ['best', 'lesson', 'board', 'final'].includes(room.phase);
+    const allOpen = !current || allesOffen(room, r);
     r.matches.forEach((m, j) => {
       const open = allOpen || (room.phase === 'reveal' && j < room.reveal);
       if (!open || !m.verdict) return;
@@ -311,13 +317,16 @@ function buildLesson(room, r) {
   return { final: false, baustein: byKey[f], stat: stat(f), vergleich, debrief: r.case.debrief || '', beispiel: top ? { name: top.name, figure: top.figure, zitat: top.check.zitate[f] } : null };
 }
 
+// Runde schließen: Duelle auslosen, Baustein-Check rechnen (sofort fertig) und die Erklärung des Bausteins zeigen.
+// Die eigentliche Bewertung läuft währenddessen im Hintergrund. Aufgedeckt wird erst, wenn der Moderator weitergeht.
 async function closeRound(room) {
   if (room.phase !== 'writing' || room.busy) return;
   room.busy = true;
   clearTimeout(room.timer);
   const r = room.rounds[room.roundIndex];
+  const t0 = Date.now();
+  let anzahl = 0;
   try {
-    room.phase = 'judging';
     room.deadline = null;
     const pairs = makePairs(room, Object.keys(room.players));
     r.matches = pairs.map(([a, b]) => {
@@ -331,24 +340,32 @@ async function closeRound(room) {
       m.checkA = m.promptA ? rubrik.kurz(rubrik.analyse(m.promptA, r.case)) : null;
       m.checkB = m.promptB ? rubrik.kurz(rubrik.analyse(m.promptB, r.case)) : null;
     }
+    r.lesson = buildLesson(room, r);
+    r.lessonShown = !!r.lesson;
+    r.revealed = false;
+    r.best = null;
     const todo = r.matches.filter((m) => !walkover(m));
+    anzahl = todo.length;
+    room.judging = true;
     room.progress = { done: 0, total: todo.length + 1 };
+    room.phase = r.lesson ? 'lesson' : 'judging';
+    room.reveal = 0;
     changed(room);
     await pool(todo.map((m) => async () => {
       try { await evaluate(room, r, m); } catch (e) { m.error = e.message || String(e); console.error('Bewertung fehlgeschlagen:', m.error); }
       room.progress.done++;
       onChange(room);
-    }), 5);
-    if (judge.DEMO) await new Promise((res) => setTimeout(res, 1500)); // kurzer Spannungsmoment
+    }), 8);
+    if (judge.DEMO) await new Promise((res) => setTimeout(res, 800));
     await chooseBest(room, r);
-    r.lesson = buildLesson(room, r);
   } catch (e) {
     console.error('Fehler beim Schließen der Runde:', e);
   } finally {
     room.busy = false;
+    room.judging = false;
     room.progress = null;
-    room.phase = 'reveal';
-    room.reveal = 0;
+    if (room.phase === 'judging') { room.phase = 'reveal'; room.reveal = 0; r.revealed = true; } // Moderator wartet schon
+    console.log('Runde ' + (room.roundIndex + 1) + ' in Raum ' + room.code + ': ' + anzahl + ' Duelle bewertet in ' + ((Date.now() - t0) / 1000).toFixed(1) + ' s' + (judge.DEMO ? ' (Standardbewertung)' : ''));
     changed(room);
   }
 }
@@ -388,9 +405,16 @@ async function hostAction(room, action, body) {
     case 'close': if (room.phase !== 'writing') fail('Es läuft gerade keine Schreibphase.'); closeRound(room).catch((e) => console.error(e)); return;
     case 'revealNext': if (room.phase === 'reveal') room.reveal = Math.min(r.matches.length, room.reveal + 1); break;
     case 'revealAll': if (room.phase === 'reveal') room.reveal = r.matches.length; break;
-    case 'best': if (room.phase === 'reveal') { room.reveal = r.matches.length; room.phase = r.best ? 'best' : r.lesson ? 'lesson' : 'board'; } break;
-    case 'lesson': if (['reveal', 'best'].includes(room.phase)) { room.reveal = r.matches.length; room.phase = r.lesson ? 'lesson' : 'board'; } break;
-    case 'board': if (['reveal', 'best', 'lesson'].includes(room.phase)) { room.reveal = r.matches.length; room.phase = 'board'; } break;
+    case 'reveal': // von der Erklärung zu den Duellen. Läuft die Bewertung noch, erscheint solange der Wartebildschirm.
+      if (room.phase !== 'lesson' || r.revealed) break;
+      if (room.judging) room.phase = 'judging'; else { room.phase = 'reveal'; room.reveal = 0; r.revealed = true; }
+      break;
+    case 'best': if (room.phase === 'reveal') { room.reveal = r.matches.length; room.phase = r.best ? 'best' : 'board'; } break;
+    case 'lesson': if (['reveal', 'best'].includes(room.phase) && r.lesson) { room.reveal = r.matches.length; room.phase = 'lesson'; } break; // Erklärung noch einmal zeigen
+    case 'board':
+      if (room.phase === 'lesson' && !r.revealed) fail('Erst die Duelle aufdecken.');
+      if (['reveal', 'best', 'lesson'].includes(room.phase)) { room.reveal = r.matches.length; room.phase = 'board'; }
+      break;
     case 'final': if (room.phase === 'board') room.phase = 'final'; break;
     case 'override': {
       const m = r && r.matches.find((x) => x.id === body.matchId);
@@ -426,11 +450,10 @@ async function hostAction(room, action, body) {
 }
 
 // ---------------------------------------------------------------- Sichten (wer sieht was)
-const PHASES_OPEN = ['best', 'lesson', 'board', 'final'];
 
 function matchView(room, m, j, level) {
   // level: 'public' (Kurzfassung), 'full' (alle Texte)
-  const open = PHASES_OPEN.includes(room.phase) || (room.phase === 'reveal' && j < room.reveal);
+  const open = allesOffen(room, room.rounds[room.roundIndex]) || (room.phase === 'reveal' && j < room.reveal);
   const v = {
     id: m.id, open,
     a: { pid: m.a, name: m.aName, figure: m.aFigure, bot: m.a === BOT },
@@ -455,7 +478,7 @@ function matchView(room, m, j, level) {
 function baukasten(room) {
   const done = new Set();
   room.rounds.forEach((x, i) => {
-    const offen = i < room.roundIndex || ['lesson', 'board', 'final'].includes(room.phase);
+    const offen = i < room.roundIndex || x.lessonShown; // erklärt ist ein Baustein, sobald seine Erklärung gezeigt wurde
     if (!offen || !x.lesson) return;
     if (x.case.fokus === ALLE) KEYS.forEach((k) => done.add(k)); else done.add(x.case.fokus);
   });
@@ -474,16 +497,25 @@ function view(room, client) {
     code: room.code, phase: room.phase, round: room.roundIndex + 1, rounds: room.settings.rounds, seconds: room.settings.seconds,
     roundSeconds: r ? caseSeconds(room, r.case) : room.settings.seconds, baukasten: baukasten(room),
     now: Date.now(), deadline: room.deadline, reveal: room.reveal, progress: room.progress, demo: judge.DEMO,
+    judging: !!room.judging, revealed: !!(r && r.revealed), hasLesson: !!(r && r.lesson),
+    report: reportOk,
     players: rank.map((p) => ({ id: p.id, name: p.name, figure: p.figure, score: p.score, wins: p.wins, bonus: p.bonus, quality: p.quality,
       submitted: !!(r && room.phase === 'writing' && r.submissions[p.id]), online: [...room.clients].some((c) => c.pid === p.id) })),
     case: r && room.phase !== 'lobby' && room.phase !== 'final' ? { titel: r.case.titel, aufgabe: r.case.aufgabe, material: r.case.material } : null,
     matches: [], best: null, role: client.role
   };
-  if (r && ['reveal', 'best', 'lesson', 'board'].includes(room.phase)) {
+  // Duelle sind erst sichtbar, wenn aufgedeckt wird. Während der Erklärung davor bleibt auch die Auslosung verdeckt.
+  if (r && (['reveal', 'best', 'board'].includes(room.phase) || (room.phase === 'lesson' && r.revealed))) {
     state.matches = r.matches.map((m, j) => matchView(room, m, j, isHost ? 'host' : me && (m.a === me.id || m.b === me.id) ? 'full' : 'public'));
-    if (PHASES_OPEN.includes(room.phase) && r.best) state.best = r.best;
-    if (['lesson', 'board'].includes(room.phase) && r.lesson) state.lesson = r.lesson;
-    state.hasLesson = !!r.lesson;
+    if (allesOffen(room, r) && r.best) state.best = r.best;
+  }
+  if (r && room.phase === 'lesson' && r.lesson) {
+    // vor dem Aufdecken ohne Namen, damit die Erklärung kein Ergebnis vorwegnimmt
+    state.lesson = r.revealed || !r.lesson.beispiel ? r.lesson : { ...r.lesson, beispiel: { zitat: r.lesson.beispiel.zitat } };
+    if (me) {
+      const m = r.matches.find((x) => x.a === me.id || x.b === me.id);
+      state.myCheck = m ? rubrik.sicht(m.a === me.id ? m.checkA : m.checkB, true) : null;
+    }
   }
   if (me) {
     const same = (x, y) => x.score === y.score && x.bonus === y.bonus && x.quality === y.quality;
@@ -522,4 +554,4 @@ function taken(room) {
   return t;
 }
 
-module.exports = { taken, rooms, createRoom, getRoom, cleanup, join, auth, submit, hostAction, view, exportRoom, setBroadcaster, load, GameError, FIGURES, MAX_PROMPT };
+module.exports = { taken, ranking, rooms, createRoom, getRoom, cleanup, join, auth, submit, hostAction, view, exportRoom, setBroadcaster, load, GameError, FIGURES, MAX_PROMPT };

@@ -6,6 +6,7 @@ const path = require('path');
 const crypto = require('crypto');
 const game = require('./lib/game');
 const judge = require('./lib/judge');
+const report = require('./lib/report');
 const { FIGURES } = require('./lib/figures');
 const { BAUSTEINE } = require('./lib/bausteine');
 
@@ -88,12 +89,25 @@ async function api(req, res, url) {
   const p = url.pathname;
   if (req.method === 'GET' && p === '/api/events') return events(req, res, url.searchParams);
   if (req.method === 'GET' && p === '/api/ping') return send(res, 200, { ok: true });
-  if (req.method === 'GET' && p === '/api/info') return send(res, 200, { demo: judge.DEMO, figures: FIGURES, maxPrompt: game.MAX_PROMPT });
+  if (req.method === 'GET' && p === '/api/info') return send(res, 200, { demo: judge.DEMO, figures: FIGURES, maxPrompt: game.MAX_PROMPT, report: report.available() });
   if (req.method === 'GET' && p === '/api/room') { const room = game.getRoom(url.searchParams.get('room')); return send(res, 200, { code: room.code, phase: room.phase, taken: game.taken(room) }); }
   if (req.method === 'GET' && p === '/api/export') {
     const room = hostRoom({ room: url.searchParams.get('room'), token: url.searchParams.get('token') });
     res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'content-disposition': 'attachment; filename="prompt-battle-' + room.code + '.json"' });
     return res.end(JSON.stringify(game.exportRoom(room), null, 2));
+  }
+  if (req.method === 'GET' && p === '/api/report') { // persönlicher Bericht als PDF, für den Teilnehmer selbst oder für die Moderation
+    const q = url.searchParams;
+    if (limited('report:' + ipOf(req), 30, 60000)) return send(res, 429, { error: 'Zu viele Anfragen. Bitte kurz warten.' });
+    const room = q.get('token') ? hostRoom({ room: q.get('room'), token: q.get('token') }) : game.getRoom(q.get('room'));
+    if (!q.get('token')) game.auth(room, q.get('pid'), q.get('key'));
+    if (!report.available()) return send(res, 503, { error: 'Der PDF-Bericht ist auf diesem Server nicht eingerichtet (npm install fehlt).' });
+    const data = report.collect(room, q.get('pid'), game.ranking(room));
+    if (!data) return send(res, 400, { error: 'Unbekannter Teilnehmer.' });
+    if (!data.runden.length) return send(res, 400, { error: 'Für den Bericht gibt es noch keine aufgedeckte Runde.' });
+    const pdf = await report.build(data);
+    res.writeHead(200, { 'content-type': 'application/pdf', 'content-length': pdf.length, 'content-disposition': 'attachment; filename="' + report.fileName(data) + '"', 'cache-control': 'no-store' });
+    return res.end(pdf);
   }
   if (req.method !== 'POST') return send(res, 404, { error: 'Nicht gefunden.' });
   const body = await readBody(req);
@@ -168,5 +182,6 @@ const server = http.createServer((req, res) => {
 game.load();
 server.listen(PORT, () => {
   console.log('Prompt Battle läuft auf Port ' + PORT);
-  console.log(judge.DEMO ? 'Standardbewertung: Kein ANTHROPIC_API_KEY gesetzt, bewertet wird regelbasiert mit dem Baustein-Check (ohne KI).' : 'Schiedsrichter: ' + judge.MODEL_JUDGE + ', Ausführung: ' + judge.MODEL_RUN);
+  if (!report.available()) console.log('Hinweis: Der PDF-Bericht ist nicht verfügbar. Dafür einmal "npm install" ausführen.');
+  console.log(judge.DEMO ? 'Standardbewertung: Kein ANTHROPIC_API_KEY gesetzt, bewertet wird regelbasiert mit dem Baustein-Check (ohne KI).' : 'Schiedsrichter: ' + judge.MODEL_JUDGE + ', Ausführung: ' + judge.MODEL_RUN + ', Aufwand: ' + judge.EFFORT);
 });

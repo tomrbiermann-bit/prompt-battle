@@ -91,7 +91,7 @@ function onState(s) {
   state = s;
   if (s.gone) { const old = me; store.del(KEY); me = null; return showJoin(old); }
   const mine = myMatch();
-  const key = [s.phase, s.round, mine ? mine.id + ':' + mine.open : '-', s.phase === 'best' || s.phase === 'lesson' || s.phase === 'board' || s.phase === 'final' ? JSON.stringify(s.players.map((p) => [p.id, p.score])) : '', s.phase === 'lobby' ? s.players.length : ''].join('|');
+  const key = [s.phase, s.round, mine ? mine.id + ':' + mine.open : '-', s.phase === 'best' || s.phase === 'lesson' || s.phase === 'board' || s.phase === 'final' ? JSON.stringify(s.players.map((p) => [p.id, p.score])) : '', s.phase === 'lobby' ? s.players.length : '', s.phase === 'lesson' ? [s.revealed, s.judging].join() : ''].join('|');
   if (key !== viewKey) { viewKey = key; refs = {}; render(); }
   update();
 }
@@ -257,10 +257,11 @@ function vBest() {
 
 // ---- Erklärung des Bausteins nach der Runde
 function vLesson() {
-  const L = state.lesson, m = myMatch();
+  const L = state.lesson;
   if (!L) return vBoard();
-  const side = m ? (m.a.pid === me.pid ? 'A' : 'B') : null;
-  const mine = side && m['check' + side];
+  const mine = state.myCheck || null;
+  // Die Erklärung läuft, während im Hintergrund bewertet wird. Danach werden die Duelle aufgedeckt.
+  const weiter = h('p', { class: 'center muted', text: state.revealed ? 'Gleich folgt die Rangliste.' : state.judging ? 'Eure Prompts werden gerade bewertet. Danach werden die Duelle aufgedeckt.' : 'Die Bewertung ist fertig. Gleich werden die Duelle aufgedeckt.' });
   if (L.final) {
     return h('div', { class: 'stack' },
       h('div', { class: 'card accent stack' },
@@ -272,7 +273,7 @@ function vLesson() {
       h('div', { class: 'card alt' }, qcEl(L.check)),
       L.debrief ? debriefEl(L.debrief) : null,
       L.vergleich ? h('details', {}, h('summary', { text: 'Muster-Prompt mit allen sechs Bausteinen' }), h('div', { class: 'box pre small', text: L.vergleich.mit })) : null,
-      h('p', { class: 'center muted', text: 'Gleich folgt die Rangliste.' }));
+      weiter);
   }
   const st = mine ? mine.stufen[L.baustein.key] || 0 : null;
   return h('div', { class: 'stack' },
@@ -282,9 +283,10 @@ function vLesson() {
       h('p', {}, h('b', { text: L.stat.mit + ' von ' + L.stat.gesamt })), statBar(L.stat),
       h('p', { class: 'small muted', text: 'Prompts mit dem Baustein ' + L.baustein.name + (L.stat.angedeutet ? ', bei ' + L.stat.angedeutet + ' weiteren war er angedeutet' : '') + '.' }),
       st != null ? h('p', {}, h('b', { text: 'In deinem Prompt: ' }), STUFE[st] + (mine.zitate && mine.zitate[L.baustein.key] ? ' ("' + mine.zitate[L.baustein.key] + '")' : '') + '.') : null,
-      L.beispiel ? h('p', {}, h('b', { class: 'orange', text: 'Stark gelöst von ' + dn(L.beispiel) + ': ' }), '"' + L.beispiel.zitat + '"') : null),
+      L.beispiel ? h('p', {}, h('b', { class: 'orange', text: (L.beispiel.name ? 'Stark gelöst von ' + dn(L.beispiel) : 'Stark gelöst in einem eurer Prompts') + ': ' }), '"' + L.beispiel.zitat + '"') : null),
     L.debrief ? debriefEl(L.debrief) : null,
-    L.vergleich ? h('details', {}, h('summary', { text: 'So sieht das im Prompt aus' }), h('div', { class: 'small', style: 'margin-top:8px' }, vergleichEl(L.vergleich))): null);
+    L.vergleich ? h('details', {}, h('summary', { text: 'So sieht das im Prompt aus' }), h('div', { class: 'small', style: 'margin-top:8px' }, vergleichEl(L.vergleich))) : null,
+    weiter);
 }
 
 function vBoard() {
@@ -299,6 +301,8 @@ function vFinal() {
     h('div', { class: 'card accent stack center' },
       h('h1', { text: r === 1 ? 'Du hast das Prompt Battle gewonnen!' : 'Platz ' + r + ' von ' + state.players.length }),
       h('div', { class: 'waitfig' }, figImg(state.me.figure)),
-      h('p', { text: state.me.score + (state.me.score === 1 ? ' Punkt' : ' Punkte') + ' für ' + dn(state.me) })),
+      h('p', { text: state.me.score + (state.me.score === 1 ? ' Punkt' : ' Punkte') + ' für ' + dn(state.me) }),
+      state.report ? h('div', {}, h('a', { class: 'btn primary', href: '/api/report?room=' + me.room + '&pid=' + me.pid + '&key=' + me.key, download: '', text: 'Meinen Bericht als PDF herunterladen' })) : null,
+      state.report ? h('p', { class: 'small muted', text: 'Der Bericht enthält deine Prompts mit Bewertung, Stärke und Tipp aus jeder Runde. Lade ihn jetzt herunter, später ist der Raum nicht mehr erreichbar.' }) : null),
     h('div', { class: 'card alt stack' }, h('h2', { text: 'Endstand' }), boardEl(state.players, me.pid), h('p', { class: 'small muted', text: TIE_NOTE })));
 }
