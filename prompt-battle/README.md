@@ -41,11 +41,13 @@ Beim Schreiben wissen die Teilnehmer nicht, um welchen Baustein es geht. Erst da
 
 ## Ablauf einer Runde
 
-1. **Schreiben:** Der Case erscheint auf dem Beamer und auf allen Geräten, der Countdown läuft. Prompts werden beim Tippen automatisch gespeichert. Läuft die Zeit ab, schließt die Runde von selbst. Mit "+1 Minute" verlängerst du, mit "Runde schließen und bewerten" beendest du früher.
-2. **Baustein der Runde:** Sobald die Runde schließt, zeigt die App die Erklärung zum Case. Währenddessen werden die Duelle im Hintergrund ausgelost und bewertet, in der Kopfzeile steht der Stand. Die Zahlen in der Erklärung kommen aus dem Baustein-Check und sind sofort da. Namen und Auslosung bleiben noch verdeckt.
+1. **Schreiben:** Der Case erscheint auf dem Beamer und auf allen Geräten, der Countdown läuft. Prompts werden beim Tippen automatisch als Entwurf gespeichert, auf dem Beamer steht dann "schreibt" an der Kreatur. Grün "fertig" wird es erst, wenn der Teilnehmer auf "Abschicken" drückt. Wer danach noch ändert, muss erneut abschicken, sonst zählt der zuletzt gespeicherte Entwurf. Läuft die Zeit ab, schließt die Runde von selbst, auch Entwürfe werden dann gewertet. Mit "+1 Minute" verlängerst du, mit "Runde schließen und bewerten" beendest du früher.
+2. **Baustein der Runde:** Sobald die Runde schließt, zeigt die App die Erklärung zum Case. Währenddessen werden die Duelle im Hintergrund ausgelost und bewertet, in der Kopfzeile steht der Stand. Die Zahlen in der Erklärung kommen zunächst aus dem Baustein-Check und sind sofort da; mit KI-Schiedsrichter werden sie nach der Bewertung durch dessen Einstufung ersetzt. Namen und Auslosung bleiben noch verdeckt.
 3. **Aufdecken:** Mit "Duelle aufdecken" geht es weiter. Bist du mit der Erklärung früher fertig als die Bewertung, erscheint solange der Wartebildschirm. Du deckst die Duelle einzeln auf ("Nächstes Duell aufdecken") oder alle auf einmal. Jeder Teilnehmer sieht auf seinem Gerät sein eigenes Duell mit Begründung, einer Stärke, einem Tipp und seinem Baustein-Check, dazu beide Prompts.
 4. **Bester Prompt:** Der beste Prompt der Runde wird allen gezeigt. Von hier aus lässt sich die Erklärung noch einmal aufrufen.
 5. **Rangliste**, dann die nächste Runde.
+
+**Navigation:** Sobald die Duelle aufgedeckt sind, steht links in der Leiste "Runde n: Erklärung · Duelle · Bester Prompt · Rangliste". Damit springst du frei zwischen den Ansichten der Runde, zum Beispiel von der Rangliste zurück zu den Duellen, wenn noch Fragen kommen, und wieder vor. Nach der letzten Runde kommt "Abschluss" dazu. Die Teilnehmer sehen jeweils die passende Ansicht mit. Punkte und Ergebnisse ändern sich dabei nicht.
 
 Nach der letzten Runde folgt die Siegerehrung. Dort kannst du alle Ergebnisse als Datei herunterladen, und jeder Teilnehmer bekommt auf seinem Gerät den Knopf "Meinen Bericht als PDF herunterladen".
 
@@ -88,10 +90,10 @@ Daraus entstehen Punkte von 0 bis 100, das Urteil mit dem Baustein, der den Unte
 ### KI-Schiedsrichter (mit `ANTHROPIC_API_KEY`)
 
 - Jeder Prompt wird mit dem Modell aus `MODEL_RUN` ausgeführt. Das Material des Cases wird dem Prompt automatisch angehängt.
-- **Tempo:** Ausführung und Urteil laufen mit Claude Sonnet und der Einstellung `EFFORT=low` (wenig Aufwand, kein vorgeschaltetes Nachdenken), die Antworten sind auf etwa 200 Wörter begrenzt, und alle Duelle einer Runde werden gleichzeitig bewertet. Außerdem läuft die Bewertung im Hintergrund, während du den Baustein erklärst. Lehnt die API eine der Tempo-Angaben ab, lässt die App sie weg und macht weiter. Wie lange eine Runde gebraucht hat, steht im Server-Log.
+- **Tempo:** Die Ausführung läuft mit Claude Sonnet und `EFFORT=low` (wenig Aufwand, kein vorgeschaltetes Nachdenken), die Antworten sind auf etwa 200 Wörter begrenzt. Das Urteil spricht Claude Opus mit `JUDGE_EFFORT=medium`, denn die Bewertung darf etwas länger brauchen, dafür übersieht sie weniger. Alle Duelle einer Runde werden gleichzeitig bewertet. Außerdem läuft die Bewertung im Hintergrund, während du den Baustein erklärst. Lehnt die API eine der Tempo-Angaben ab, lässt die App sie weg und macht weiter. Wie lange eine Runde gebraucht hat, steht im Server-Log.
 - Der Schiedsrichter (`MODEL_JUDGE`) sieht den Case, die bisher behandelten Bausteine, den Baustein der Runde, die Bewertungshinweise, beide Prompts und beide Antworten, aber keine Namen. Welcher Prompt "A" und welcher "B" ist, wird zufällig gewürfelt, damit keine Seite einen Positionsvorteil hat.
 - Gewertet werden je etwa zur Hälfte das Ergebnis und das Prompt-Handwerk nach den bisher behandelten Bausteinen. Der Schiedsrichter ist angewiesen, nur diese beim Namen zu nennen. Eine KI hält sich daran fast immer, aber nicht garantiert. Die Standardbewertung hält die Regel sicher ein.
-- Der Baustein-Check läuft zusätzlich mit und liefert die Marken und die Zahlen für die Erklärung nach der Runde.
+- Der Schiedsrichter stuft außerdem jeden bisher behandelten Baustein in beiden Prompts ein (fehlt, angedeutet, vorhanden, stark) und nennt die Fundstelle. Diese Einstufung ersetzt die Marken des Baustein-Checks, die Zahlen in der Erklärung und den Baustein-Check im Bericht, sobald die Bewertung fertig ist. Die KI versteht auch ungewöhnliche Formulierungen ("Als Pressesprecherin schreibe …"), der Check erkennt nur Muster. Bis die Bewertung fertig ist, und wenn die KI ausfällt, gelten die Marken des Baustein-Checks.
 - **Fällt die KI aus** (Netz, Guthaben, Überlastung), entscheidet für das betroffene Duell automatisch der Baustein-Check. Das Duell ist dann mit "Baustein-Check statt KI" markiert, das Spiel läuft weiter.
 
 KI-Urteile sind nicht unfehlbar und können bei knappen Duellen schwanken. Am aufgedeckten Duell kannst du "Neu bewerten" wählen oder selbst entscheiden. Unter "Teilnehmer verwalten" lassen sich Punkte von Hand korrigieren.
@@ -176,8 +178,9 @@ docker run -p 3000:3000 -e ADMIN_PASSWORD=geheim -v prompt-battle-data:/app/data
 | `ADMIN_PASSWORD` | Passwort, mit dem auf `/host` Räume eröffnet werden. Fehlt es, erzeugt der Server bei jedem Start ein zufälliges und schreibt es ins Log. | zufällig |
 | `ANTHROPIC_API_KEY` | API-Schlüssel für den KI-Schiedsrichter. Fehlt er, läuft die Standardbewertung ohne KI. | leer |
 | `MODEL_RUN` | Modell, das die Prompts der Teilnehmer ausführt | `claude-sonnet-5-5` |
-| `EFFORT` | Aufwand der KI pro Antwort: `low`, `medium` oder `high`. Mehr Aufwand ist gründlicher und langsamer. `aus` lässt die Angabe weg. | `low` |
-| `MODEL_JUDGE` | Modell des Schiedsrichters | `claude-sonnet-5-5` |
+| `EFFORT` | Aufwand beim Ausführen der Prompts: `low`, `medium` oder `high`. Mehr Aufwand ist gründlicher und langsamer. `aus` lässt die Angabe weg. | `low` |
+| `MODEL_JUDGE` | Modell des Schiedsrichters | `claude-opus-5-5` |
+| `JUDGE_EFFORT` | Aufwand des Schiedsrichters pro Urteil, Werte wie bei `EFFORT` | `medium` |
 | `PORT` | Port des Servers (Render setzt ihn selbst) | `3000` |
 | `DATA_DIR` | Ordner für den gespeicherten Spielstand | `./data` |
 

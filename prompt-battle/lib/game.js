@@ -138,12 +138,16 @@ function auth(room, pid, key) {
   return p;
 }
 
-function submit(room, pid, key, text) {
+// Entwürfe werden automatisch gespeichert und zählen beim Schließen der Runde. "Fertig" ist ein Prompt erst,
+// wenn der Teilnehmer auf "Abschicken" gedrückt hat (final). Eine spätere Änderung macht ihn wieder zum Entwurf.
+function submit(room, pid, key, text, final) {
   const p = auth(room, pid, key);
   if (room.phase !== 'writing') fail('Die Runde ist schon geschlossen.');
   text = String(text || '').replace(/\r/g, '').trim().slice(0, MAX_PROMPT);
   const r = room.rounds[room.roundIndex];
+  r.done = r.done || {};
   if (text) r.submissions[p.id] = text; else delete r.submissions[p.id];
+  if (text && final) r.done[p.id] = true; else delete r.done[p.id];
   changed(room);
 }
 
@@ -218,7 +222,7 @@ function startRound(room) {
   const c = clone(room.cases[room.roundIndex % room.cases.length]);
   // Der Baukasten wächst mit: bekannt sind die Bausteine aller bisherigen Runden und der dieser Runde
   c.bekannt = rubrik.bekanntBis(room.rounds.slice(0, room.roundIndex).map((x) => x.case).concat([c]));
-  room.rounds[room.roundIndex] = { index: room.roundIndex, case: c, submissions: {}, matches: [], best: null };
+  room.rounds[room.roundIndex] = { index: room.roundIndex, case: c, submissions: {}, done: {}, matches: [], best: null };
   room.phase = 'writing';
   room.reveal = 0;
   room.deadline = Date.now() + caseSeconds(room, c) * 1000;
@@ -255,6 +259,22 @@ async function evaluate(room, r, m) {
   m.verdict = swap
     ? { winner: v.winner === 'A' ? 'b' : 'a', scoreA: v.scoreB, scoreB: v.scoreA, reason: sw(v.reason), strengthA: sw(v.strengthB), strengthB: sw(v.strengthA), tipA: sw(v.tipB), tipB: sw(v.tipA), cheatA: v.cheatB, cheatB: v.cheatA }
     : { winner: v.winner === 'A' ? 'a' : 'b', scoreA: v.scoreA, scoreB: v.scoreB, reason: v.reason, strengthA: v.strengthA, strengthB: v.strengthB, tipA: v.tipA, tipB: v.tipB, cheatA: v.cheatA, cheatB: v.cheatB };
+  // Hat der Schiedsrichter die Bausteine eingestuft, ersetzt das die Marken des regelbasierten Checks:
+  // die KI versteht auch ungewöhnliche Formulierungen, der Check erkennt nur Muster.
+  const ka = swap ? v.checkB : v.checkA, kb = swap ? v.checkA : v.checkB;
+  if (ka && m.checkA) m.checkA = uebernehmen(m.checkA, ka);
+  if (kb && m.checkB) m.checkB = uebernehmen(m.checkB, kb);
+}
+
+function uebernehmen(check, ki) {
+  const K = check.bekannt || KEYS;
+  const stufen = { ...check.stufen }, zitate = { ...check.zitate };
+  for (const k of K) {
+    if (ki.stufen[k] === undefined) continue;
+    stufen[k] = ki.stufen[k];
+    if (ki.zitate[k]) zitate[k] = ki.zitate[k]; else if (!stufen[k]) delete zitate[k];
+  }
+  return { ...check, stufen, zitate, ki: true, anzahl: K.filter((k) => stufen[k] >= 2).length, alle: KEYS.filter((k) => stufen[k] >= 2).length };
 }
 
 function walkover(m) {
@@ -357,6 +377,7 @@ async function closeRound(room) {
       onChange(room);
     }), 8);
     if (judge.DEMO) await new Promise((res) => setTimeout(res, 800));
+    if (!judge.DEMO) r.lesson = buildLesson(room, r); // Zahlen und Beispiel der Erklärung mit den Stufen des Schiedsrichters
     await chooseBest(room, r);
   } catch (e) {
     console.error('Fehler beim Schließen der Runde:', e);
@@ -416,6 +437,17 @@ async function hostAction(room, action, body) {
       if (['reveal', 'best', 'lesson'].includes(room.phase)) { room.reveal = r.matches.length; room.phase = 'board'; }
       break;
     case 'final': if (room.phase === 'board') room.phase = 'final'; break;
+    case 'goto': { // freie Navigation innerhalb einer aufgedeckten Runde: Erklärung, Duelle, bester Prompt, Rangliste, Abschluss
+      const ziel = String(body.target || '');
+      if (!r || !r.revealed) fail('Erst die Duelle aufdecken.');
+      if (!['lesson', 'reveal', 'best', 'board', 'final'].includes(ziel)) fail('Unbekanntes Ziel.');
+      if (ziel === 'lesson' && !r.lesson) fail('Für diese Runde gibt es keine Erklärung.');
+      if (ziel === 'best' && !r.best) fail('Es gibt noch keinen besten Prompt.');
+      if (ziel === 'final' && room.roundIndex + 1 < room.settings.rounds) fail('Der Abschluss kommt nach der letzten Runde.');
+      room.reveal = r.matches.length;
+      room.phase = ziel;
+      break;
+    }
     case 'override': {
       const m = r && r.matches.find((x) => x.id === body.matchId);
       if (!m || !['a', 'b'].includes(body.winner)) fail('Ungültige Korrektur.');
@@ -429,6 +461,7 @@ async function hostAction(room, action, body) {
       const m = r && r.matches.find((x) => x.id === body.matchId);
       if (!m || m.walkover) fail('Dieses Duell kann nicht neu bewertet werden.');
       try { await evaluate(room, r, m); m.manual = false; } catch (e) { m.error = e.message || String(e); }
+      if (!judge.DEMO) r.lesson = buildLesson(room, r);
       await chooseBest(room, r).catch(() => {});
       break;
     }
@@ -441,7 +474,7 @@ async function hostAction(room, action, body) {
     case 'kick': {
       if (!room.players[body.pid]) fail('Unbekannter Teilnehmer.');
       delete room.players[body.pid];
-      if (r && room.phase === 'writing') delete r.submissions[body.pid];
+      if (r && room.phase === 'writing') { delete r.submissions[body.pid]; if (r.done) delete r.done[body.pid]; }
       break;
     }
     default: fail('Unbekannte Aktion.');
@@ -497,10 +530,10 @@ function view(room, client) {
     code: room.code, phase: room.phase, round: room.roundIndex + 1, rounds: room.settings.rounds, seconds: room.settings.seconds,
     roundSeconds: r ? caseSeconds(room, r.case) : room.settings.seconds, baukasten: baukasten(room),
     now: Date.now(), deadline: room.deadline, reveal: room.reveal, progress: room.progress, demo: judge.DEMO,
-    judging: !!room.judging, revealed: !!(r && r.revealed), hasLesson: !!(r && r.lesson),
+    judging: !!room.judging, revealed: !!(r && r.revealed), hasLesson: !!(r && r.lesson), hasBest: !!(r && r.best),
     report: reportOk,
     players: rank.map((p) => ({ id: p.id, name: p.name, figure: p.figure, score: p.score, wins: p.wins, bonus: p.bonus, quality: p.quality,
-      submitted: !!(r && room.phase === 'writing' && r.submissions[p.id]), online: [...room.clients].some((c) => c.pid === p.id) })),
+      submitted: !!(r && room.phase === 'writing' && r.done && r.done[p.id]), draft: !!(r && room.phase === 'writing' && r.submissions[p.id]), online: [...room.clients].some((c) => c.pid === p.id) })),
     case: r && room.phase !== 'lobby' && room.phase !== 'final' ? { titel: r.case.titel, aufgabe: r.case.aufgabe, material: r.case.material } : null,
     matches: [], best: null, role: client.role
   };
@@ -521,6 +554,7 @@ function view(room, client) {
     const same = (x, y) => x.score === y.score && x.bonus === y.bonus && x.quality === y.quality;
     state.me = { id: me.id, name: me.name, figure: me.figure, score: me.score, rank: rank.findIndex((p) => same(p, me)) + 1 };
     state.myPrompt = r && r.submissions[me.id] ? r.submissions[me.id] : '';
+    state.myDone = !!(r && r.done && r.done[me.id]);
   } else if (client.role === 'player') {
     state.gone = true; // wurde entfernt
   }

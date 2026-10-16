@@ -13,6 +13,7 @@ const WERT = [0, 0.4, 0.75, 1];
 // ---------------------------------------------------------------- Text zerlegen
 function saetze(text) {
   const out = [];
+  text = text.replace(/(\d)\.(\d{3})\b/g, '$1$2'); // Tausenderpunkte ("1.000 Zeichen") sind kein Satzende
   const re = /[^.!?\n]+(?:[.!?]+(?=\s|$)|\n|$)/g;
   let m;
   while ((m = re.exec(text))) {
@@ -46,7 +47,7 @@ function finde(S, re) {
 }
 
 // Beschriftung wie "Rolle:" oder "[Kontext]" zählt nur, wenn danach auch etwas steht
-const LABELS = 'rolle|aufgabe|auftrag|kontext|hintergrund|anforderung(?:en)?|ausgabeformat|format|qualitätskriteri(?:um|en)|kriterien';
+const LABELS = 'rolle|persona|role|aufgabe|auftrag|kontext|hintergrund|anforderung(?:en)?|ausgabeformat|format|qualitätskriteri(?:um|en)|kriterien';
 function label(S, name) {
   const re = new RegExp('(?:^|[\\s.])\\[?(?:' + name + ')\\]?\\s*[:\\]]\\s*(.*?)(?=\\[?(?:' + LABELS + ')\\]?\\s*[:\\]]|$)');
   for (const s of S) {
@@ -57,39 +58,68 @@ function label(S, name) {
 }
 
 // ---------------------------------------------------------------- Die sechs Bausteine
-const ROLLE = /\b(du bist|sie sind|ihr seid|agiere als|handle als|handele als|antworte als|schreibe? als|arbeite als|argumentiere als|versetze dich in|schlüpfe in|nimm die (rolle|perspektive|sicht)|in der rolle|aus (der )?sicht (eine[sr]|von|des|der|unserer)|aus der perspektive|du arbeitest (als|in|im|bei|für)|stell dir vor,? du)\b/;
-const ROLLE_TIEFE = /(prüf|achte(st)? (dabei |besonders |vor allem )?(auf|darauf)|beurteil|bewerte(st)?\b|verantwort|zuständig|spezialisiert|mit (dem |einem )?(fokus|schwerpunkt|blick) auf|blickwinkel|kennst|weißt|verstehst|betreust|seit \d+ jahren|seit (vielen|über)|deren aufgabe|dessen aufgabe|deine aufgabe ist|dir ist wichtig|legst (du )?wert|und (schreibst|formulierst|erklärst|übersetzt|denkst|arbeitest|berätst|kommunizierst|sprichst|informierst|siehst|fragst)|der (täglich|regelmäßig)|die (täglich|regelmäßig))/;
-const ROLLE_ALLGEMEIN = /\b(experte|expertin|profi|assistent|assistentin|helfer|helferin|ki|chatbot|texter|texterin|autor|autorin|spezialist|spezialistin)\b/;
+// Rolle: Eine Rollenzuweisung besteht aus einer Formulierung ("Du bist …", "Als …", "Übernimm die Rolle …")
+// und einer Rollenbezeichnung (Pressesprecher, Kundenberaterin, Mitarbeiter, Experte …). Feste Formulierungen
+// reichen allein, weiche brauchen im selben Satz eine Rollenbezeichnung, sonst wäre "Du bist dran" eine Rolle.
+const NOMEN_SRC = '(?<![\\p{L}])(?:(?:\\p{L}+-)?\\p{L}*(?:sprecher|manager|leiter|leitung|berater|experte|expertin|expert|mitarbeiter|mitarbeitende|assistent|assistant|ingenieur|techniker|redakteur|journalist|texter|autor|jurist|anwalt|anwältin|controller|analyst|trainer|lehrer|sachbearbeiter|referent|beauftragte|verantwortliche|ansprechpartner|kommunikator|planer|meister|officer|specialist|consultant|writer|spezialist|fachkraft|fachmann|fachfrau|kollege|kollegin|angestellte|geschäftsführer|bürgermeister|direktor|dezernent|kundenservice|pressestelle|abteilung|marketer|designer|entwickler|programmierer|architekt|helfer|stratege|strategin|moderator|betreuer|verwalter|vermittler|dienstleister|versorger|handwerker|monteur|elektriker|installateur|kaufmann|kauffrau|organisator|generalist|lektor|übersetzer|dolmetscher|pädagoge|psychologe|pfleger)|ki|chatbot|bot|copilot|sprachmodell|modell|person|team|agentur|vorstand|profi|chef|chefin|coach|arzt|ärztin)(?:in|innen|:in|/in|\\*in|e|en|s|n|ern)?(?![\\p{L}])';
+const NOMEN = new RegExp(NOMEN_SRC, 'u');
+// feste Rollenformulierungen: zählen auch ohne erkannte Rollenbezeichnung
+const ROLLE_FEST = /(?<![\p{L}])(agiere als|agierst als|handle als|handele als|handelst als|fungiere als|fungierst als|versetze dich in|versetz dich in|schlüpf(e|st)? in|(nimm|übernimm|nimmst|übernimmst) die (rolle|perspektive|sicht|position)|in der rolle|in die rolle|deine rolle ist|deine rolle:|your role is|aus (der )?sicht (eine[sr]|von|des|der|unserer|einer)|aus der perspektive|du arbeitest (als|in|im|bei|für)|du bist (tätig|beschäftigt|angestellt) (als|bei|in|im)|verhalte dich (wie|als)|verhältst dich (wie|als)|act as|take (on )?the role|you are (a|an)|you're (a|an))(?![\p{L}])/u;
+// weiche Formulierungen: brauchen eine Rollenbezeichnung im selben Satz
+const ROLLE_WEICH = /(?<![\p{L}])(du bist|sie sind|ihr seid|ich bin|wir sind|stell dir vor,? du|gehe? davon aus,? dass du|angenommen,? du|antworte als|schreib\w* als|verfasse als|formuliere als|arbeite als|argumentiere als|erkläre als|you are|i am)(?![\p{L}])/u;
+const ROLLE_ALS = new RegExp('(?<![\\p{L}])als (?:(?:ein|eine|einen|einer|der|die|das|des|dem) )?(?:\\p{L}+(?:er|e|en|es|em),? )?(?:\\p{L}+(?:er|e|en|es|em) )?' + NOMEN_SRC, 'u');
+const ROLLE_TIEFE = /(prüf|achte(st)? (dabei |besonders |vor allem )?(auf|darauf)|beurteil|bewerte(st)?\b|verantwort|zuständig|spezialisiert|mit (dem |einem )?(fokus|schwerpunkt|blick) auf|blickwinkel|kennst|weißt|verstehst|betreust|seit \d+ jahren|seit (vielen|über)|deren aufgabe|dessen aufgabe|deine aufgabe ist|dir ist wichtig|legst (du )?wert|und (schreibst|formulierst|erklärst|übersetzt|denkst|arbeitest|berätst|kommunizierst|sprichst|informierst|siehst|fragst)|der (täglich|regelmäßig)|die (täglich|regelmäßig)|jahren? erfahrung|erfahren[e]? (im|in|mit))/;
+// allgemeine Bezeichnungen ohne Fach oder Organisation sind nur ein angedeuteter Blickwinkel
+const ROLLE_ALLGEMEIN = /\b(experte|expertin|expert|profi|assistent|assistentin|assistant|helfer|helferin|ki|chatbot|bot|texter|texterin|autor|autorin|spezialist|spezialistin|writer|sprachmodell|copilot|modell|person)\b/g;
+const SPEZIFIKATION = /\b(für|bei|in|im|der|des|von|vom|mit|einer|eines|seit|aus|auf|dessen|deren)\b/;
+
+const istRolle = (s) => ROLLE_FEST.test(s.t) || ROLLE_ALS.test(s.t) || (ROLLE_WEICH.test(s.t) && NOMEN.test(s.t));
 
 function rolle(S) {
-  const s = finde(S, ROLLE) || label(S, 'rolle');
+  const s = S.find(istRolle) || label(S, 'rolle|persona|role');
   if (!s) return { stufe: 0 };
   const n = woerter(s.t).length;
   if (ROLLE_TIEFE.test(s.t) && n >= 7) return { stufe: 3, zitat: zitat(s.roh), notiz: 'mit Blickwinkel und Prüfauftrag' };
-  if (n <= 4 || (n <= 6 && ROLLE_ALLGEMEIN.test(s.t))) return { stufe: 1, zitat: zitat(s.roh), notiz: 'nur ein Titel, ohne Blickwinkel' };
+  // nur allgemein ("Du bist ein Experte"), wenn außer der allgemeinen Bezeichnung weder Fach noch Organisation dasteht
+  const m = s.t.match(ROLLE_ALLGEMEIN);
+  if (m) {
+    const rest = s.t.replace(ROLLE_ALLGEMEIN, ' ');
+    const danach = s.t.slice(s.t.search(ROLLE_ALLGEMEIN) + m[0].length);
+    if (!NOMEN.test(rest) && !SPEZIFIKATION.test(danach) && !ROLLE_FEST.test(s.t)) return { stufe: 1, zitat: zitat(s.roh), notiz: 'nur ein allgemeiner Titel, ohne Fach oder Blickwinkel' };
+  }
   return { stufe: 2, zitat: zitat(s.roh), notiz: 'eine Rolle ist benannt, der Prüfauftrag fehlt noch' };
 }
 
 const V_KLAR = ['extrahiere', 'kategorisiere', 'vergleiche', 'bewerte', 'analysiere', 'priorisiere', 'identifiziere', 'ordne', 'fasse', 'strukturiere', 'gliedere', 'unterscheide', 'trenne', 'gruppiere', 'leite', 'überführe', 'begründe', 'prüfe', 'übersetze', 'sortiere', 'markiere', 'klassifiziere', 'ermittle', 'berechne', 'weise', 'werte', 'filtere', 'kürze', 'liste', 'verdichte', 'stelle'];
 // Verben, die etwas herstellen: mit einem konkreten Objekt dahinter sind sie eindeutig ("Schreibe einen Brief an die Anwohner")
-const V_PROD = ['schreibe', 'schreib', 'verfasse', 'formuliere', 'erstelle', 'entwirf', 'entwerfe', 'erkläre', 'erläutere', 'beschreibe', 'entwickle', 'erarbeite', 'skizziere', 'informiere', 'präsentiere', 'nenne'];
+const V_PROD = ['setze', 'bereite', 'generiere', 'generier', 'erzeuge', 'produziere', 'baue', 'bau', 'schreibe', 'schreib', 'verfasse', 'formuliere', 'erstelle', 'entwirf', 'entwerfe', 'erkläre', 'erläutere', 'beschreibe', 'entwickle', 'erarbeite', 'skizziere', 'informiere', 'präsentiere', 'nenne'];
 const V_ALLG = V_PROD.concat(['gib', 'generiere', 'liefere', 'bereite', 'baue', 'mache', 'mach']);
 // Aufträge im Infinitiv: "Jede Zahl mit Seitenangabe belegen", "Brief schreiben"
 const INFINITIVE = V_KLAR.concat(V_PROD).filter((v) => v.length > 4 && !['entwirf', 'schreib'].includes(v)).map((v) => v.replace(/e$/, '') + 'en').concat(['entwerfen', 'belegen', 'auflisten']);
 const OBJEKT = ['einen', 'eine', 'ein', 'den', 'die', 'das', 'dem', 'der', 'zwei', 'drei', 'vier', 'fünf', 'alle', 'jede', 'jeden', 'jedes', 'kurz', 'daraus', 'dazu'];
 const V_SCHWACH = /\b(hilf mir|hilf uns|mach es|mache es|mach das|mach mal|mach daraus|mach draus|mach eine|mache eine|schreib mal|mal was|irgendwas|irgendwie|kümmere dich|schau (dir|mal)|kannst du|könntest du|ich brauche|ich bräuchte|ich möchte|ich will|wäre (gut|schön|toll))\b/;
-const VORSPANN = /^(\[?(aufgabe|auftrag|task)\]?\s*[:\]]?\s*|\d+[.)]\s*|[-*•]\s*|bitte\s+|und\s+|dann\s+|danach\s+|anschließend\s+|zuerst\s+|nun\s+|jetzt\s+)+/;
+const UMSCHREIBUNG = /^(ich (möchte|will|brauche|bräuchte|hätte gern\w*|wünsche mir)[, ]*(dass du |von dir[, ]*(dass du )?)?|(kannst|könntest|würdest|kannst du mir|könntest du mir|würdest du mir) ?(du )?(bitte |mir |mal )*|du sollst |du musst |du wirst |bitte (hilf mir und |mir )?)/;
+const VORSPANN = /^((deine |die |meine )?\[?(aufgabe|auftrag|task|ziel|deine aufgabe ist es|deine aufgabe ist)\]?\s*[:\]]?\s*|\d+[.)]\s*|[-*•]\s*|bitte\s+|und\s+|dann\s+|danach\s+|anschließend\s+|zuerst\s+|nun\s+|jetzt\s+)+/;
 
 function aufgabe(S) {
   let best = { stufe: 0 };
   const nimm = (stufe, s, notiz) => { if (stufe > best.stufe) best = { stufe, zitat: zitat(s.roh), notiz }; };
   for (const s of S) {
-    const kern = s.t.replace(VORSPANN, '');
+    let kern = s.t.replace(VORSPANN, '');
+    // höfliche Umschreibung: "Ich möchte, dass du einen Brief schreibst", "Kannst du bitte einen Brief erstellen", "Du sollst einen Brief schreiben"
+    const hm = kern.match(UMSCHREIBUNG);
+    let umschrieben = false;
+    if (hm) {
+      const rest = kern.slice(hm[0].length);
+      const rw = woerter(rest);
+      const verb = rw.find((x) => INFINITIVE.includes(x) || V_KLAR.includes(x.replace(/st$/, 'e')) || V_PROD.includes(x.replace(/st$/, 'e')) || V_ALLG.includes(x.replace(/st$/, 'e')));
+      if (verb) { umschrieben = true; kern = (verb.endsWith('en') ? verb.slice(0, -2) + 'e' : verb.replace(/st$/, 'e')) + ' ' + rw.filter((x) => x !== verb).join(' '); }
+    }
     const w = woerter(kern);
     let erstes = w[0] || '';
     if (!V_KLAR.includes(erstes) && !V_ALLG.includes(erstes) && (V_KLAR.includes(erstes + 'e') || V_ALLG.includes(erstes + 'e'))) erstes += 'e'; // "Fass", "Vergleich", "Erstell"
     const letztes = w[w.length - 1] || '';
-    const schwach = V_SCHWACH.test(s.t);
+    const schwach = !umschrieben && V_SCHWACH.test(s.t);
     const objekt = w.length >= 5 && w.slice(1, 6).some((x) => OBJEKT.includes(x)); // "Schreibe einen Brief ...", "Erstelle mir eine Tabelle ..."
     if ((V_KLAR.includes(erstes) || (V_PROD.includes(erstes) && objekt)) && !schwach) nimm(3, s, 'eindeutiges Verb am Satzanfang');
     else if (V_ALLG.includes(erstes) && !schwach) nimm(2, s, 'ein Auftrag ist da, aber noch unscharf: Was genau soll entstehen?');
@@ -111,7 +141,7 @@ function kontext(S) {
   if (!n) return { stufe: 0 };
   // als Fundstelle lieber einen Satz zeigen, der nicht schon die Rolle beschreibt
   const kand = [lab, c, a, b].filter(Boolean);
-  const s = kand.find((x) => !ROLLE.test(x.t)) || kand[0];
+  const s = kand.find((x) => !istRolle(x)) || kand[0];
   const teile = [a && 'Anlass', b && 'Adressat', c && 'Vorwissen oder Erwartung'].filter(Boolean);
   const fehlt = [!a && 'Anlass', !b && 'Adressat', !c && 'Vorwissen des Adressaten'].filter(Boolean);
   return { stufe: n, zitat: zitat(s.roh), notiz: n === 3 ? 'Anlass, Adressat und Vorwissen sind genannt' : teile.join(' und ') + ' genannt, es fehlt: ' + fehlt.join(', ') };
@@ -119,7 +149,7 @@ function kontext(S) {
 
 // Formulierungen, die zu Kontext oder Kriterien gehören, sollen nicht als Ausschluss zählen
 const NICHT_ANF = /(kein(e|en)? [\w-]*(hintergrund|kenntnis|kenntnisse|vorwissen|erfahrung|ahnung|fachwissen)|ohne [\w-]*(fachbegriffe|fachjargon|fachsprache|fremdwörter|füllwörter|floskeln|vorwissen|hintergrund|fachwissen|spekulation\w*)|keine offenen fragen|nicht (vom fach|vertraut)|wissen nicht|(kaum|keine) zeit|nicht nur)/g;
-const A_PFLICHT = /(\bmuss\b|\bmüssen\b|zwingend|unbedingt|auf jeden fall|pflicht|enthalten (sein|muss)|soll(te|en|ten)? .{0,50}(enthalten|vorkommen|nennen|erwähn|stehen)|erwähne|nenne (dabei|unbedingt|auch|außerdem|jeweils|den|die|das)|gehe? (dabei |auch |außerdem )?auf .{2,60} ein|berücksichtige|beziehe .{2,50} ein|folgende (punkte|inhalte|angaben)|weise .{2,70} zu\b|hebe .{2,70} hervor|mit (verantwortliche|termin|frist|datum|betrag|begründung|quelle)|\bje(weils)? (ein|eine|einen|mit)\b|bezug auf|unterscheide)/;
+const A_PFLICHT = /(\bmuss\b|\bmüssen\b|zwingend|unbedingt|auf jeden fall|pflicht|enthalten (sein|muss)|soll(te|en|ten)? .{0,50}(enthalten|vorkommen|nennen|erwähn|stehen)|erwähne|nenne (dabei|unbedingt|auch|außerdem|jeweils|den|die|das)|gehe? (dabei |auch |außerdem )?auf .{2,60} ein|berücksichtige|beziehe .{2,50} ein|folgende (punkte|inhalte|angaben)|weise .{2,70} zu\b|hebe .{2,70} hervor|mit (verantwortliche|termin|frist|datum|betrag|begründung|quelle)|\bje(weils)? (ein|eine|einen|mit)\b|bezug auf|unterscheide|\b(angeben|aufnehmen|einbauen|aufführen|einfügen|anführen|auflisten|mitliefern|ergänzen)\b|gib .{2,70} an\b|nimm .{2,60} (auf|mit auf)\b|baue? .{2,60} ein\b|füge? .{2,60} (ein|hinzu|bei)\b|führe? .{2,60} (auf|an)\b|weise? .{2,60} hin\b|\binhalte?\s*:|inhaltlich|entschuldig|dank(e|t) .{0,30}(für|den)|lade .{2,40} ein)/;
 const A_AUSSCHLUSS = /(\bkein(e|en|er|erlei)?\b|\bnicht\b|\bohne\b|vermeide|verzichte|niemals|\bnie\b|unter keinen umständen|auf keinen fall|lass(e)? .{2,40} weg|weglassen|anonymisier|tabu\b|aussparen|spare .{2,40} aus)/;
 const A_SCHWACH = /(beachte|achte darauf|wichtig ist|wichtig:)/;
 
@@ -135,7 +165,7 @@ function anforderungen(S) {
 }
 
 const F_STRUKTUR = /(tabelle|spalte|zeile\b|stichpunkt|bullet|aufzählung|\bliste\b|gliederung|gliedere|überschrift|zwischenüberschrift|absatz|absätze|abschnitt|nummerier|one-?pager|\bslide|folie|markdown|\bstruktur|aufbau:|betreff|anrede|grußformel|\bjson\b|\bcsv\b|executive summary|zuerst .{2,80}(dann|danach|anschließend)|\b1\.\s.{2,120}\b2\.\s)/;
-const F_UMFANG = /((maximal|höchstens|max\.?|mindestens|genau|etwa|ca\.?|rund|in|à|je)\s+(\d+|zwei|drei|vier|fünf|sechs|zehn)\s*(wörter|wörtern|worte|worten|sätze|sätzen|satz|zeilen|zeichen|absätze|absätzen|stichpunkte|stichpunkten|bulletpoints?|bullets|punkte|punkten|minuten|seiten?|spalten)|\b(\d+|zwei|drei)[- ]?(minütig|minuten|seitig)|eine (halbe )?seite|einseitig)/;
+const F_UMFANG = /((maximal|höchstens|max\.?|mindestens|mind\.?|genau|etwa|ca\.?|rund|in|à|je|bis zu|bis maximal|nicht (länger|mehr|länger als|mehr als)|weniger als|unter|höchstens|umfang:?)\s+(\d[\d.,]*|eine?|zwei|drei|vier|fünf|sechs|sieben|acht|neun|zehn|zwölf|zwanzig)\s*(din[- ]?a4[- ]?)?(wörter|wörtern|worte|worten|sätze|sätzen|satz|zeilen|zeichen|absätze|absätzen|stichpunkte|stichpunkten|bulletpoints?|bullets|punkte|punkten|minuten|seiten?|spalten)|\b(\d+|zwei|drei)[- ]?(minütig|minuten|seitig)|eine (halbe )?(din[- ]?a4[- ]?)?seite|einseitig|din[- ]?a4[- ]?seite|halbe seite|kurz und knapp)/;
 const F_SORTE = /(brief|e-?mail|\bmail\b|update|bericht|zusammenfassung|pitch|\brede\b|nachricht|\bpost\b|protokoll|vorlage|\bkurz|knapp)/;
 
 function format(S) {
@@ -149,17 +179,17 @@ function format(S) {
 }
 
 const Q_PRUEFBAR = [
-  /verständlich (für|ohne|auch für)|ohne (fachbegriffe|fachjargon|fachsprache|fremdwörter)|für laien verständlich|in einfacher sprache|alltagssprache/,
+  /verständlich (für|ohne|auch für)|ohne (fachbegriffe|fachjargon|fachsprache|fremdwörter|fachwörter|abkürzungen|nachfragen?|rückfragen?)|keine (fachbegriffe|fachsprache|fachjargon|fremdwörter|fachwörter|abkürzungen|schachtelsätze)|frei von (fachjargon|fachbegriffen|fachsprache|fremdwörtern|floskeln|füllwörtern)|für laien verständlich|laienverständlich|leicht verständlich|allgemeinverständlich|in einfacher sprache|einfache sprache|alltagssprache|kurze sätze|aktiv(e|en)? formulier|aktiv formuliert|\bverständlich\b/,
   /ohne (füllwörter|floskeln|spekulation\w*)|keine (floskeln|füllwörter|spekulation\w*)/,
   /sofort (anwendbar|nutzbar|verwendbar|umsetzbar)|direkt (verwendbar|nutzbar|versendbar|einsetzbar)|versandfertig|ohne nacharbeit/,
-  /keine offenen fragen|\bvollständig\b|lückenlos/,
+  /keine offenen fragen|\bvollständig\b|lückenlos|nach dem lesen|beim lesen|soll .{0,60}(wissen|erkennen|nachvollziehen|verstehen können)|weiß .{0,40}(danach|anschließend|sofort)/,
   /seitenangabe|seitenzahl|mit (quelle|beleg|fundstelle)|\bbeleg|quellenangabe|nachprüfbar|überprüfbar|nachvollziehbar|belastbar/,
   /fakten und annahmen|annahmen (kennzeichne|markiere|trenne|als solche)|kennzeichne .{0,40}(annahme|unsicher|vermutung)|unsicher(es|heiten)? (kennzeichne|markiere)/,
-  /nichts erfinde|erfinde nichts|nichts hinzu|keine (erfundenen|zusätzlichen|eigenen) (angaben|fakten|zahlen|inhalte|informationen|details)|nur (aus|was|informationen|angaben|zahlen|fakten|inhalte) .{0,40}(material|text|notizen|transkript|vorlage|auszug|steht|stehen|genannt)|ausschließlich .{0,40}(material|text|notizen|transkript|vorlage|auszug)|nicht (explizit |ausdrücklich )?im (text|auszug|material|transkript)|nicht in (den|der|dem) (notizen|vorlage|unterlagen|quellen)|keine (vorhersagen|prognosen)/,
+  /nichts erfinde|erfinde nichts|nichts hinzu|keine (erfundenen|zusätzlichen|eigenen) (angaben|fakten|zahlen|inhalte|informationen|details)|nur (aus|was|informationen|angaben|zahlen|fakten|inhalte) .{0,40}(material|text|notizen|transkript|vorlage|auszug|steht|stehen|genannt)|ausschließlich .{0,40}(material|text|notizen|transkript|vorlage|auszug)|nicht (explizit |ausdrücklich )?im (text|auszug|material|transkript)|nicht in (den|der|dem) (notizen|vorlage|unterlagen|quellen)|keine (vorhersagen|prognosen)|bleib\w* bei den fakten|bei den fakten bleib|nur (die )?fakten|übereinstimm|stimm(t|en) mit .{0,30}(material|vorlage|text|quelle|angaben) überein|ohne (beschönigung|übertreibung|werbesprache|marketingsprache)|nicht beschönig|keine (beschönigung|übertreibung)|\btatsachen\b/,
   /widerspr(uch|üche)|unbelegt|als (annahme|schätzung|vermutung) (kennzeichne|markier)/,
   /wenn .{2,60}(fehlt|fehlen|unklar|nicht (im|in den|in der|aus)).{0,60}(sag|kennzeichne|markiere|frag|schreib|weise)/,
   /so,? dass|sodass|damit (die|der|sie|er|man|jeder|alle) .{0,60}(versteh|entscheid|weiß|wissen|handeln|nachvollzieh)|in (\d+|zwei|drei) (minuten|sekunden) (lesbar|sprechbar|vortragbar|erfassbar)|auf einen blick/,
-  /gut ist (das ergebnis|die antwort|der text),? wenn|woran (man|ich|wir)|maßstab|priorisiere|wichtiger als|\bvor (vollständigkeit|detailtiefe|länge)\b/,
+  /gut ist (das ergebnis|die antwort|der text),? wenn|ist (gut|gelungen|fertig|erfolgreich|richtig),? wenn|gilt als (gut|gelungen),? wenn|in (einer|einem|\d+|zwei|drei|fünf) (minute|minuten|sekunden) (lesbar|verstanden|versteh|erfass|erfasst|lesen)|woran (man|ich|wir)|maßstab|priorisiere|wichtiger als|\bvor (vollständigkeit|detailtiefe|länge)\b/,
   /prägnant|datenbasiert|\bkonkret\b|eindeutig formuliert|widerspruchsfrei|korrekt(e|en)? (zahlen|angaben)|rechne nach|zahlen (stimmen|prüfen)/
 ];
 const Q_TON = /(neutral|sachlich|objektiv|wertschätzend|respektvoll|empathisch|freundlich|höflich|transparent|ehrlich|behördlich|tonalität|tonfall|\bton\b|du-form|sie-form|duze|sieze)/;

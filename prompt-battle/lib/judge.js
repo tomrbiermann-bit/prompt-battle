@@ -2,18 +2,22 @@
 // Ohne ANTHROPIC_API_KEY entscheidet die Standardbewertung (Baustein-Check, siehe rubrik.js): regelbasiert,
 // ohne dass ein Prompt den Server verlässt. Mit Schlüssel werden die Prompts von einer KI ausgeführt und bewertet.
 const rubrik = require('./rubrik');
-const { byKey, ALLE } = require('./bausteine');
+const { byKey, ALLE, KEYS } = require('./bausteine');
 
 const API_KEY = process.env.ANTHROPIC_API_KEY || '';
 const BASE_URL = (process.env.ANTHROPIC_BASE_URL || 'https://api.anthropic.com').replace(/\/$/, '');
 const MODEL_RUN = process.env.MODEL_RUN || 'claude-sonnet-5-5';
-const MODEL_JUDGE = process.env.MODEL_JUDGE || 'claude-sonnet-5-5';
-const EFFORT = (process.env.EFFORT || 'low').toLowerCase(); // wenig Aufwand = schnelle Antworten; 'aus' schaltet die Angabe ab
+const MODEL_JUDGE = process.env.MODEL_JUDGE || 'claude-opus-5-5';
+// Ausführen der Prompts: wenig Aufwand, damit es schnell geht. Bewerten: mehr Aufwand, damit nichts übersehen wird.
+// 'aus' schaltet die Angabe ab.
+const EFFORT = (process.env.EFFORT || 'low').toLowerCase();
+const JUDGE_EFFORT = (process.env.JUDGE_EFFORT || 'medium').toLowerCase();
 const DEMO = !API_KEY; // true = Standardbewertung ohne KI
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 let structuredOk = true; // wird abgeschaltet, falls die API output_config.format ablehnt
-let effortOk = !['aus', 'off', 'none', ''].includes(EFFORT); // wird abgeschaltet, falls die API die Aufwands-Angabe ablehnt
+let effortOk = true; // wird abgeschaltet, falls die API die Aufwands-Angabe ablehnt
+const effortAn = (e) => !['aus', 'off', 'none', ''].includes(e);
 let thinkingOk = true; // wird abgeschaltet, falls die API die Angabe zum Nachdenken ablehnt
 
 async function callClaude(body, { timeoutMs = 45000, tries = 3 } = {}) {
@@ -52,19 +56,19 @@ async function callClaude(body, { timeoutMs = 45000, tries = 3 } = {}) {
 
 // Tempo: wenig Aufwand und kein vorgeschaltetes Nachdenken. Beides sind Wünsche an die API. Lehnt sie eine Angabe ab
 // (anderes Modell, geänderte Schnittstelle), wird die Angabe für den Rest der Laufzeit weggelassen und der Aufruf wiederholt.
-function tempo(model) {
+function tempo(model, effort) {
   const t = {};
-  if (effortOk) t.output_config = { effort: EFFORT };
-  if (thinkingOk) {
+  if (effortOk && effortAn(effort)) t.output_config = { effort };
+  if (thinkingOk) { // Opus denkt immer nach, da wird nichts angegeben
     if (/sonnet-5/.test(model)) t.thinking = { type: 'between_tools' };
     else if (/haiku-5/.test(model)) t.thinking = { type: 'disabled' };
   }
   return t;
 }
 
-async function callFast(body, opts) {
+async function callFast(body, opts, effort = EFFORT) {
   for (let i = 0; i < 3; i++) {
-    const t = tempo(body.model);
+    const t = tempo(body.model, effort);
     const merged = { ...body, ...t };
     if (body.output_config || t.output_config) merged.output_config = { ...(t.output_config || {}), ...(body.output_config || {}) };
     try {
@@ -92,14 +96,14 @@ async function callJson({ system, user, schema, max_tokens = 2000 }) {
   const base = { model: MODEL_JUDGE, max_tokens, system, messages: [{ role: 'user', content: user }] };
   if (structuredOk) {
     try {
-      const msg = await callFast({ ...base, output_config: { format: { type: 'json_schema', schema } } });
+      const msg = await callFast({ ...base, output_config: { format: { type: 'json_schema', schema } } }, undefined, JUDGE_EFFORT);
       return parseJson(textOf(msg));
     } catch (e) {
       if (e.status === 400 && /output_config|format|schema/i.test(e.body || '')) structuredOk = false;
       else throw e;
     }
   }
-  const msg = await callFast(base);
+  const msg = await callFast(base, undefined, JUDGE_EFFORT);
   return parseJson(textOf(msg));
 }
 
@@ -137,7 +141,20 @@ Regeln:
 - begruendung: 2 bis 3 Sätze, warum der Sieger gewonnen hat (für alle sichtbar).
 - staerke_a, staerke_b: je ein Satz, was an diesem Prompt gut war.
 - tipp_a, tipp_b: je ein konkreter Satz, was diesen Prompt beim nächsten Mal besser machen würde, bezogen auf einen bisher behandelten Baustein.
-Antworte ausschließlich mit einem JSON-Objekt mit genau diesen Feldern: sieger ("A" oder "B"), punkte_a, punkte_b, begruendung, staerke_a, staerke_b, tipp_a, tipp_b, schummel_a, schummel_b.`;
+- bausteine_a, bausteine_b: Stufe jedes bisher behandelten Bausteins in diesem Prompt, mit Fundstelle. Lies dafür den ganzen Prompt sorgfältig, Formulierung und Reihenfolge sind egal: "Als Pressesprecherin der Stadtwerke schreibe …" ist genauso eine Rolle wie "Du bist …", eine Rolle kann auch in der Ich-Form stehen oder mitten im Text. Stufen: 0 = fehlt. 1 = angedeutet (nur ein allgemeines Wort wie "Experte" oder "gut", eine Überschrift ohne Inhalt, oder so vage, dass die KI nichts damit anfangen kann). 2 = vorhanden (klar erkennbar und brauchbar). 3 = stark (so ausgeführt, wie es bei "Gut formuliert heißt" steht). fundstelle: das wörtliche Zitat aus dem Prompt, höchstens 140 Zeichen, leer wenn der Baustein fehlt.
+Antworte ausschließlich mit einem JSON-Objekt mit genau diesen Feldern: sieger ("A" oder "B"), punkte_a, punkte_b, begruendung, staerke_a, staerke_b, tipp_a, tipp_b, schummel_a, schummel_b, bausteine_a, bausteine_b.`;
+
+// Das Schema wächst mit den bekannten Bausteinen: Für jeden gibt der Schiedsrichter Stufe und Fundstelle an
+function bausteinSchema(c) {
+  const K = rubrik.analyse('', c).bekannt;
+  const props = Object.fromEntries(K.map((k) => [k, {
+    type: 'object',
+    properties: { stufe: { type: 'integer', description: '0 fehlt, 1 angedeutet, 2 vorhanden, 3 stark' }, fundstelle: { type: 'string', description: 'wörtliches Zitat aus dem Prompt, leer wenn der Baustein fehlt' } },
+    required: ['stufe', 'fundstelle'], additionalProperties: false
+  }]));
+  return { type: 'object', properties: props, required: K, additionalProperties: false };
+}
+const judgeSchema = (c) => ({ ...JUDGE_SCHEMA, properties: { ...JUDGE_SCHEMA.properties, bausteine_a: bausteinSchema(c), bausteine_b: bausteinSchema(c) }, required: JUDGE_SCHEMA.required.concat(['bausteine_a', 'bausteine_b']) });
 
 const JUDGE_SCHEMA = {
   type: 'object',
@@ -172,7 +189,7 @@ const clampScore = (n) => Math.max(0, Math.min(100, Math.round(Number(n) || 0)))
 async function judgeMatch(c, pA, oA, pB, oB) {
   if (DEMO) return standardJudge(c, pA, pB);
   const user = `${caseBlock(c)}\n\n<prompt_a>\n${pA}\n</prompt_a>\n<antwort_a>\n${oA}\n</antwort_a>\n\n<prompt_b>\n${pB}\n</prompt_b>\n<antwort_b>\n${oB}\n</antwort_b>\n\nWelcher Prompt gewinnt?`;
-  const j = await callJson({ system: JUDGE_SYSTEM, user, schema: JUDGE_SCHEMA });
+  const j = await callJson({ system: JUDGE_SYSTEM, user, schema: judgeSchema(c) });
   const winner = String(j.sieger || '').trim().toUpperCase() === 'B' ? 'B' : 'A';
   let sa = clampScore(j.punkte_a), sb = clampScore(j.punkte_b);
   // Punkte müssen zum Sieger passen
@@ -183,8 +200,28 @@ async function judgeMatch(c, pA, oA, pB, oB) {
     reason: String(j.begruendung || ''),
     strengthA: String(j.staerke_a || ''), strengthB: String(j.staerke_b || ''),
     tipA: String(j.tipp_a || ''), tipB: String(j.tipp_b || ''),
-    cheatA: !!j.schummel_a, cheatB: !!j.schummel_b
+    cheatA: !!j.schummel_a, cheatB: !!j.schummel_b,
+    checkA: bausteineAus(j.bausteine_a, c), checkB: bausteineAus(j.bausteine_b, c)
   };
+}
+
+// Stufen des Schiedsrichters in die Form des Baustein-Checks bringen (nur bekannte Bausteine, Stufen 0 bis 3)
+function bausteineAus(b, c) {
+  if (!b || typeof b !== 'object') return null;
+  const K = rubrik.analyse('', c).bekannt;
+  const stufen = {}, zitate = {};
+  let n = 0;
+  for (const k of K) {
+    const e = b[k];
+    if (!e || typeof e !== 'object') continue;
+    const st = Math.round(Number(e.stufe));
+    if (!(st >= 0 && st <= 3)) continue;
+    n++;
+    stufen[k] = st;
+    const z = String(e.fundstelle || '').replace(/\s+/g, ' ').trim();
+    if (st > 0 && z) zitate[k] = z.length > 140 ? z.slice(0, 139).replace(/\s+\S*$/, '') + ' …' : z;
+  }
+  return n ? { stufen, zitate } : null;
 }
 
 // ---------------------------------------------------------------- Bester Prompt der Runde
@@ -224,4 +261,4 @@ function standardBest(c, candidates) {
   return { index: i, ...rubrik.bester(A[i], c) };
 }
 
-module.exports = { runPrompt, judgeMatch, pickBest, standardJudge, standardBest, DEMO, MODEL_RUN, MODEL_JUDGE, EFFORT };
+module.exports = { runPrompt, judgeMatch, pickBest, standardJudge, standardBest, DEMO, MODEL_RUN, MODEL_JUDGE, EFFORT, JUDGE_EFFORT };

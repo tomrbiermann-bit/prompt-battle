@@ -22,6 +22,7 @@ h1, h2, h3, .hand { font-family: var(--hand); font-weight: 400; letter-spacing: 
 h1 { font-size: 2.3rem; } h2 { font-size: 1.8rem; } h3 { font-size: 1.35rem; }
 p { margin: .4em 0; }
 .orange { color: var(--orange); }
+.green { color: var(--ok); }
 .muted { color: var(--ink-soft); }
 .small { font-size: .88rem; }
 .center { text-align: center; }
@@ -40,6 +41,10 @@ button, .btn { font-family: var(--hand); font-size: 1.25rem; line-height: 1; col
 button:hover, .btn:hover { transform: translate(-1px, -1px); box-shadow: 4px 5px 0 rgba(70, 78, 82, .3); }
 button:active, .btn:active { transform: translate(2px, 3px); box-shadow: 1px 1px 0 rgba(70, 78, 82, .3); }
 button.primary, .btn.primary { background: var(--orange); color: #fff; }
+#controls .nav { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; padding: 2px 8px 2px 10px; border: 2px dashed var(--line); border-radius: 999px; }
+#controls .nav .navbtn { border: 0; box-shadow: none; background: transparent; font-size: .95rem; padding: 4px 8px 5px; border-radius: 999px; color: var(--ink); }
+#controls .nav .navbtn:hover { background: #f4f1ea; }
+#controls .nav .navbtn.aktiv { background: var(--ink); color: #fff; }
 button.ghost { border-width: 2px; box-shadow: none; font-size: 1.05rem; padding: 6px 12px 8px; }
 .btn.ghostlink { border-width: 2px; box-shadow: none; font-size: 1.05rem; padding: 6px 12px 8px; }
 button:disabled { opacity: .45; cursor: not-allowed; transform: none; }
@@ -182,6 +187,7 @@ body.screen { height: 100vh; overflow: hidden; display: flex; flex-direction: co
 .pcard .n { overflow: hidden; overflow-wrap: anywhere; font-size: .92em; }
 .pcard.off { opacity: .4; }
 .pcard .done { position: absolute; right: 6%; top: 0; background: var(--ok); color: #fff; border-radius: 999px; font-size: .8em; padding: 1px 9px 3px; }
+.pcard .done.draft { background: #fff; color: var(--ink); border: 2px dashed var(--orange); opacity: .85; }
 .pcard.in img { animation: hop .5s ease-out 1; }
 .mlist { display: grid; gap: 8px; }
 .mrow { display: grid; grid-template-columns: 1fr auto 1fr; gap: 8px; align-items: center; border: 2px solid var(--ink); border-radius: var(--sketch2); background: #fff; padding: 5px 12px; font-family: var(--hand); font-size: 1.1em; cursor: default; }

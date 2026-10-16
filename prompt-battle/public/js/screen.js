@@ -66,7 +66,7 @@ function playerCard(p, opts = {}) {
   const fresh = !knownPlayers.has(p.id);
   knownPlayers.add(p.id);
   return h('div', { class: 'pcard' + (p.online ? '' : ' off') + (fresh ? ' in' : '') },
-    opts.done && p.submitted ? h('span', { class: 'done', text: 'fertig' }) : null,
+    opts.done && p.submitted ? h('span', { class: 'done', text: 'fertig' }) : opts.done && p.draft ? h('span', { class: 'done draft', text: 'schreibt' }) : null,
     figImg(p.figure), h('div', { class: 'n', text: dn(p) }));
 }
 
@@ -236,8 +236,8 @@ const UPDATES = {
     refs.grid.replaceChildren(...state.players.slice().sort((a, b) => a.name.localeCompare(b.name)).map((p) => playerCard(p)));
   },
   writing() {
-    const n = state.players.filter((p) => p.submitted).length;
-    refs.count.textContent = n + ' von ' + state.players.length + ' haben abgegeben';
+    const n = state.players.filter((p) => p.submitted).length, e = state.players.filter((p) => p.draft && !p.submitted).length;
+    refs.count.textContent = n + ' von ' + state.players.length + ' haben abgeschickt' + (e ? ' · ' + e + ' schreib' + (e === 1 ? 't' : 'en') + ' noch' : '');
     refs.grid.replaceChildren(...state.players.slice().sort((a, b) => a.name.localeCompare(b.name)).map((p) => playerCard(p, { done: true })));
   },
   judging() {
@@ -270,26 +270,36 @@ function renderControls() {
     kids = [h('span', { class: 'muted', text: s.demo ? 'Die Bewertung läuft.' : 'Die Bewertung läuft. Das dauert je nach Teilnehmerzahl etwa 20 bis 60 Sekunden.' }), h('span', { class: 'grow' }), refs.err];
   } else if (s.phase === 'reveal') {
     const all = s.reveal >= s.matches.length;
-    kids = [all ? null : btn('Alle aufdecken', () => act('revealAll'), 'ghost'), btn('Direkt zur Rangliste', () => act('board'), 'ghost'), h('span', { class: 'grow' }), refs.err,
-      all ? btn('Bester Prompt der Runde', () => act('best'), 'primary') : btn('Nächstes Duell aufdecken', () => act('revealNext'), 'primary')];
+    kids = [nav(), all ? null : btn('Alle aufdecken', () => act('revealAll'), 'ghost'), h('span', { class: 'grow' }), refs.err,
+      all ? btn(s.hasBest ? 'Bester Prompt der Runde' : 'Rangliste zeigen', () => act('best'), 'primary') : btn('Nächstes Duell aufdecken', () => act('revealNext'), 'primary')];
   } else if (s.phase === 'best') {
-    kids = [s.best && s.best.output ? btn(showOut ? 'Antwort der KI ausblenden' : 'Antwort der KI zeigen', () => { showOut = !showOut; onState(state); }, 'ghost') : null,
-      s.hasLesson ? btn('Baustein noch einmal zeigen', () => act('lesson'), 'ghost') : null, h('span', { class: 'grow' }), refs.err,
-      btn('Rangliste zeigen', () => act('board'), 'primary')];
+    kids = [nav(), s.best && s.best.output ? btn(showOut ? 'Antwort der KI ausblenden' : 'Antwort der KI zeigen', () => { showOut = !showOut; onState(state); }, 'ghost') : null,
+      h('span', { class: 'grow' }), refs.err, btn('Rangliste zeigen', () => act('board'), 'primary')];
   } else if (s.phase === 'lesson') {
     // Die Erklärung kommt vor den Duellen: Solange du erklärst, wird im Hintergrund bewertet.
     kids = s.revealed
-      ? [full, h('span', { class: 'grow' }), refs.err, btn('Rangliste zeigen', () => act('board'), 'primary')]
+      ? [nav(), full, h('span', { class: 'grow' }), refs.err, btn('Rangliste zeigen', () => act('board'), 'primary')]
       : [full, h('span', { class: 'muted', text: s.judging ? 'Die Bewertung läuft im Hintergrund. Du kannst in Ruhe erklären.' : 'Die Bewertung ist fertig.' }), h('span', { class: 'grow' }), refs.err,
         btn(s.judging ? 'Weiter, auch wenn noch bewertet wird' : 'Duelle aufdecken', () => act('reveal'), s.judging ? '' : 'primary')];
   } else if (s.phase === 'board') {
     const last = s.round >= s.rounds;
-    kids = [manage, last ? null : cases, full, h('span', { class: 'grow' }), refs.err, btn(last ? 'Zur Siegerehrung' : 'Runde ' + (s.round + 1) + ' starten', () => act('start'), 'primary')];
+    kids = [nav(), manage, last ? null : cases, full, h('span', { class: 'grow' }), refs.err, btn(last ? 'Zur Siegerehrung' : 'Runde ' + (s.round + 1) + ' starten', () => act('start'), 'primary')];
   } else if (s.phase === 'final') {
-    kids = [h('a', { class: 'btn', href: '/api/export?room=' + room + '&token=' + token, text: 'Ergebnisse herunterladen' }), manage,
+    kids = [nav(), h('a', { class: 'btn', href: '/api/export?room=' + room + '&token=' + token, text: 'Ergebnisse herunterladen' }), manage,
       state.report ? h('span', { class: 'muted small', text: 'Jeder Teilnehmer kann jetzt auf seinem Gerät seinen Bericht als PDF laden.' }) : null, h('span', { class: 'grow' }), refs.err, h('a', { class: 'btn', href: '/host', text: 'Neuer Raum' })];
   }
   controls.replaceChildren(...kids.filter(Boolean));
+}
+
+// Navigation innerhalb einer aufgedeckten Runde: zurück zur Erklärung oder zu den Duellen, wenn noch Fragen kommen
+function nav() {
+  const s = state;
+  if (!s.revealed) return null;
+  const last = s.round >= s.rounds;
+  const ziele = [s.hasLesson ? ['lesson', 'Erklärung'] : null, ['reveal', 'Duelle'], s.hasBest ? ['best', 'Bester Prompt'] : null, ['board', 'Rangliste'], last ? ['final', 'Abschluss'] : null].filter(Boolean);
+  return h('div', { class: 'nav', title: 'Runde ' + s.round + ': zwischen den Ansichten dieser Runde wechseln' },
+    h('span', { class: 'small muted', text: 'Runde ' + s.round + ':' }),
+    ziele.map(([ziel, text]) => h('button', { class: 'navbtn' + (s.phase === ziel ? ' aktiv' : ''), text, onclick: () => { if (s.phase !== ziel) act('goto', { target: ziel }); } })));
 }
 
 function modal(title, bodyEl, footer) {

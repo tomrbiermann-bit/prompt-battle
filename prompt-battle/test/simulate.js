@@ -50,8 +50,11 @@ function startMock() {
       if (first) { first = false; mockCalls.failed++; res.writeHead(529, { 'content-type': 'application/json' }); return res.end('{"type":"error","error":{"type":"overloaded_error"}}'); }
       // Tempo-Angaben: wenig Aufwand bei jedem Aufruf. Die Angabe zum Nachdenken lehnt dieser Testserver ab,
       // danach muss die App ohne sie weiterarbeiten.
-      assert(body.output_config && body.output_config.effort === 'low', 'Aufruf ohne output_config.effort = low');
-      assert(body.model === 'claude-sonnet-5-5', 'Unerwartetes Modell: ' + body.model);
+      // Ausführung: Sonnet mit wenig Aufwand. Bewertung: Opus mit mittlerem Aufwand und ohne Angabe zum Nachdenken.
+      const istUrteil = !!(body.output_config && body.output_config.format);
+      assert(body.output_config && body.output_config.effort === (istUrteil ? 'medium' : 'low'), 'Aufwand stimmt nicht: ' + JSON.stringify(body.output_config));
+      assert(body.model === (istUrteil ? 'claude-opus-5-5' : 'claude-sonnet-5-5'), 'Unerwartetes Modell: ' + body.model);
+      assert(!istUrteil || !body.thinking, 'Für Opus darf keine Angabe zum Nachdenken gesendet werden');
       if (body.thinking) {
         assert(runde === 0, 'Die abgelehnte Angabe zum Nachdenken wurde in Runde ' + (runde + 1) + ' wieder gesendet');
         mockCalls.thinkingRejected++;
@@ -71,7 +74,11 @@ function startMock() {
           if (mockCalls.judge === 9) { mockCalls.broken++; res.writeHead(400, { 'content-type': 'application/json' }); return res.end('{"type":"error","error":{"type":"invalid_request_error","message":"kaputt"}}'); }
           const a = user.match(/<prompt_a>\n([\s\S]*?)\n<\/prompt_a>/)[1], bb = user.match(/<prompt_b>\n([\s\S]*?)\n<\/prompt_b>/)[1];
           const w = a.length >= bb.length ? 'A' : 'B';
-          text = JSON.stringify({ sieger: w, punkte_a: Math.min(95, 30 + a.length / 8 | 0), punkte_b: Math.min(95, 30 + bb.length / 8 | 0), begruendung: 'Prompt ' + w + ' ist ausführlicher. Prompt A und Prompt B im Vergleich.', staerke_a: 'Stärke von Prompt A', staerke_b: 'Stärke von Prompt B', tipp_a: 'Tipp A', tipp_b: 'Tipp B', schummel_a: /schiedsrichter/i.test(a), schummel_b: /schiedsrichter/i.test(bb) });
+          // Bausteine je Prompt: das Schema verlangt genau die bekannten Bausteine
+          const bk = Object.keys(props.bausteine_a.properties);
+          assert(bk.length === erwartet && props.bausteine_a.required.length === erwartet, 'Baustein-Schema passt nicht zu den bekannten Bausteinen');
+          const stufen = (txt) => Object.fromEntries(bk.map((k) => [k, { stufe: /prompt-schiedsrichter|schiedsrichter/i.test(txt) ? 0 : 2, fundstelle: txt.slice(0, 40) }]));
+          text = JSON.stringify({ bausteine_a: stufen(a), bausteine_b: stufen(bb), sieger: w, punkte_a: Math.min(95, 30 + a.length / 8 | 0), punkte_b: Math.min(95, 30 + bb.length / 8 | 0), begruendung: 'Prompt ' + w + ' ist ausführlicher. Prompt A und Prompt B im Vergleich.', staerke_a: 'Stärke von Prompt A', staerke_b: 'Stärke von Prompt B', tipp_a: 'Tipp A', tipp_b: 'Tipp B', schummel_a: /schiedsrichter/i.test(a), schummel_b: /schiedsrichter/i.test(bb) });
         } else { mockCalls.best++; text = '```json\n' + JSON.stringify({ nummer: 1, begruendung: 'Bester der Runde.', lernpunkt: 'Kontext hilft.' }) + '\n```'; }
       } else { mockCalls.run++; text = 'Antwort auf: ' + String(user).slice(0, 60); }
       res.writeHead(200, { 'content-type': 'application/json' });
@@ -143,7 +150,12 @@ const PROMPTS = [
       assert(s.roundSeconds === ([60, 60, 60, 300, 300, 360, 480][r]), 'Schreibzeit stimmt nicht: ' + s.roundSeconds); // ab Case 4 haben die Cases eigene Zeiten
       assert(s.case.fokus === undefined && !s.lesson, 'Baustein der Runde ist zu früh sichtbar');
       // einer gibt nichts ab (kampfloser Sieg), alle anderen schon
-      for (let i = 0; i < N; i++) if (!(r === 1 && i === 3)) await post('/api/submit', { room, pid: players[i].pid, key: players[i].key, text: PROMPTS[(i + r) % PROMPTS.length] + ' #' + i });
+      // Entwurf (Autosave) zählt noch nicht als fertig, erst das Abschicken. Spieler 1 bleibt beim Entwurf, der trotzdem gewertet wird.
+      for (let i = 0; i < N; i++) if (!(r === 1 && i === 3)) await post('/api/submit', { room, pid: players[i].pid, key: players[i].key, text: PROMPTS[(i + r) % PROMPTS.length] + ' #' + i, final: i !== 1 });
+      const hs = await state('room=' + room + '&token=' + token);
+      assert(hs.players.filter((p) => p.submitted).length === N - 1 - (r === 1 ? 1 : 0) && hs.players.filter((p) => p.draft).length === N - (r === 1 ? 1 : 0), 'Fertig-Marken stimmen nicht: ' + JSON.stringify(hs.players.map((p) => [p.submitted, p.draft])));
+      const my1 = await state('room=' + room + '&pid=' + players[1].pid + '&key=' + players[1].key);
+      assert(my1.myPrompt && my1.myDone === false, 'Entwurf von Spieler 1 wird falsch gemeldet');
       await host('close');
       // Neu: Erst kommt die Erklärung des Bausteins, währenddessen wird im Hintergrund bewertet.
       let ps = await state('room=' + room + '&pid=' + players[0].pid + '&key=' + players[0].key);
@@ -187,6 +199,7 @@ const PROMPTS = [
         assert(!m.error, 'Bewertung fehlgeschlagen: ' + m.error);
         if (m.fallback) fallbacks++;
         if (m.promptA) assert(m.checkA && m.checkA.stufen && m.checkA.stufen.rolle !== undefined, 'Baustein-Check fehlt');
+        if (MOCK && !m.walkover && !m.fallback) for (const S of ['A', 'B']) if (!/schiedsrichter/i.test(m['prompt' + S])) assert(Object.values(m['check' + S].stufen).every((x) => x === 2) && m['check' + S].anzahl === Object.keys(m['check' + S].stufen).length, 'Stufen des Schiedsrichters wurden nicht übernommen: ' + JSON.stringify(m['check' + S]));
         // nichts vorwegnehmen: Marken und Texte kennen nur die Bausteine bis zu dieser Runde
         const erlaubt = Math.min(r + 1, 6);
         for (const ck of [m.checkA, m.checkB]) if (ck) assert(Object.keys(ck.stufen).length === erlaubt && ck.gesamt === erlaubt, 'Marken zeigen unbekannte Bausteine in Runde ' + (r + 1));
@@ -228,6 +241,22 @@ const PROMPTS = [
       s = await state('room=' + room + '&token=' + token);
       assert(s.phase === 'board', 'Rangliste fehlt');
       assert(s.players.reduce((a, p) => a + p.score, 0) > before, 'Punkte wurden nicht vergeben');
+      // Navigation: von der Rangliste zurück zu den Duellen und wieder vor, der Abschluss erst nach der letzten Runde
+      if (r === 1 || r === ROUNDS - 1) {
+        await host('goto', { target: 'reveal' });
+        s = await state('room=' + room + '&token=' + token);
+        assert(s.phase === 'reveal' && s.reveal === s.matches.length && s.matches.every((m) => m.open), 'Zurück zu den Duellen klappt nicht');
+        let abgelehnt = false;
+        try { await host('goto', { target: 'final' }); } catch (_) { abgelehnt = true; }
+        assert(abgelehnt === (r !== ROUNDS - 1), 'Abschluss-Navigation: ' + (abgelehnt ? 'abgelehnt' : 'erlaubt') + ' in Runde ' + (r + 1));
+        if (r === ROUNDS - 1) {
+          s = await state('room=' + room + '&token=' + token);
+          assert(s.phase === 'final', 'Abschluss über die Navigation fehlt');
+        }
+        await host('goto', { target: 'board' });
+        s = await state('room=' + room + '&token=' + token);
+        assert(s.phase === 'board' && s.players.reduce((a, p) => a + p.score, 0) > before, 'Zurück zur Rangliste klappt nicht');
+      }
     }
     await host('start'); // nach der letzten Runde: Finale
     s = await state('room=' + room + '&token=' + token);

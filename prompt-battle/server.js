@@ -137,7 +137,7 @@ async function api(req, res, url) {
   }
   if (p === '/api/submit') {
     const room = game.getRoom(body.room);
-    game.submit(room, body.pid, body.key, body.text);
+    game.submit(room, body.pid, body.key, body.text, !!body.final);
     return send(res, 200, { ok: true });
   }
   return send(res, 404, { error: 'Nicht gefunden.' });
@@ -183,5 +183,5 @@ game.load();
 server.listen(PORT, () => {
   console.log('Prompt Battle läuft auf Port ' + PORT);
   if (!report.available()) console.log('Hinweis: Der PDF-Bericht ist nicht verfügbar. Dafür einmal "npm install" ausführen.');
-  console.log(judge.DEMO ? 'Standardbewertung: Kein ANTHROPIC_API_KEY gesetzt, bewertet wird regelbasiert mit dem Baustein-Check (ohne KI).' : 'Schiedsrichter: ' + judge.MODEL_JUDGE + ', Ausführung: ' + judge.MODEL_RUN + ', Aufwand: ' + judge.EFFORT);
+  console.log(judge.DEMO ? 'Standardbewertung: Kein ANTHROPIC_API_KEY gesetzt, bewertet wird regelbasiert mit dem Baustein-Check (ohne KI).' : 'Schiedsrichter: ' + judge.MODEL_JUDGE + ' (Aufwand ' + judge.JUDGE_EFFORT + '), Ausführung: ' + judge.MODEL_RUN + ' (Aufwand ' + judge.EFFORT + ')');
 });

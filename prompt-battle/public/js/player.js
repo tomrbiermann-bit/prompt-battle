@@ -158,28 +158,37 @@ function vWriting() {
   const count = h('span', { class: 'small muted' });
   const setCount = () => { count.textContent = ta.value.length + ' / ' + info.maxPrompt + ' Zeichen'; };
   setCount();
-  let sent = s.myPrompt || '';
+  let sent = s.myPrompt || '', done = !!s.myDone;
+  const zeige = () => {
+    const text = ta.value.trim();
+    const ungespeichert = ta.value !== sent;
+    refs.status.textContent = !text ? 'Noch nichts abgegeben.' : done && !ungespeichert ? 'Abgeschickt. Du kannst bis zum Ende der Zeit weiter ändern und erneut abschicken.' : done && ungespeichert ? 'Geändert. Drücke erneut auf Abschicken, sonst zählt dein Entwurf.' : 'Entwurf gespeichert. Drücke auf Abschicken, wenn du fertig bist.';
+    refs.status.className = 'small ' + (!text ? 'muted' : done && !ungespeichert ? 'green' : 'orange');
+    refs.go.textContent = done && !ungespeichert ? 'Abgeschickt' : 'Abschicken';
+    refs.go.className = done && !ungespeichert ? 'ghost' : 'primary';
+  };
   const send = async (manual) => {
     clearTimeout(saveTimer);
     if (state.phase !== 'writing') return;
     const text = ta.value;
     if (text === sent && !manual) return;
     try {
-      await api('/api/submit', { room: me.room, pid: me.pid, key: me.key, text });
+      await api('/api/submit', { room: me.room, pid: me.pid, key: me.key, text, final: !!manual });
       sent = text;
-      refs.status.textContent = text.trim() ? (manual ? 'Abgegeben. Du kannst bis zum Ende der Zeit weiter ändern.' : 'Automatisch gespeichert.') : 'Noch nichts abgegeben.';
-      refs.status.className = 'small ' + (text.trim() ? 'orange' : 'muted');
+      done = !!manual && !!text.trim();
+      zeige();
     } catch (e) { refs.status.textContent = e.message; refs.status.className = 'small error'; }
   };
-  ta.addEventListener('input', () => { setCount(); clearTimeout(saveTimer); saveTimer = setTimeout(() => send(false), 1200); });
-  refs.status.textContent = sent ? 'Dein Prompt ist gespeichert.' : 'Noch nichts abgegeben.';
+  ta.addEventListener('input', () => { setCount(); if (done) done = false; zeige(); clearTimeout(saveTimer); saveTimer = setTimeout(() => send(false), 1200); });
+  refs.go = h('button', { class: 'primary', text: 'Abschicken', onclick: () => send(true) });
+  zeige();
   setTimeout(() => ta.focus(), 50);
   return h('div', { class: 'stack' },
     caseCard(s.case),
     h('div', { class: 'card stack' },
       h('div', { class: 'row' }, h('h3', { class: 'grow', text: 'Dein Prompt' }), refs.timer),
       ta,
-      h('div', { class: 'row' }, h('button', { class: 'primary', text: 'Abschicken', onclick: () => send(true) }), h('span', { class: 'grow' }), count),
+      h('div', { class: 'row' }, refs.go, h('span', { class: 'grow' }), count),
       refs.status));
 }
 
